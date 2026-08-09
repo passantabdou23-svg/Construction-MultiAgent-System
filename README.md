@@ -49,6 +49,17 @@ python -m pip install -r requirements.txt
 Copy-Item .env.example .env
 ```
 
+Verify and ingest the controlled RAG source documents:
+
+```powershell
+python ingest_documents.py
+```
+
+The command verifies each PDF checksum and page count before creating
+`rag_data/chunks.jsonl`. Every chunk contains its document edition, jurisdiction,
+section or clause when detected, page number, official source URL, licence, and source
+checksum. `rag_data/` is generated locally and is intentionally not committed.
+
 Install and prepare Ollama:
 
 ```powershell
@@ -85,7 +96,7 @@ python -m unittest discover -s tests -v
 python -m unittest test_stress_cases -v
 ```
 
-The suite verifies input rejection, Pydantic contracts, multiple-material storage, foreign-key enforcement, trusted procurement arithmetic and dates, CPM calculations, ChromaDB retrieval, and audit logging.
+The suite verifies input rejection, Pydantic contracts, multiple-material storage, foreign-key enforcement, trusted procurement arithmetic and dates, CPM calculations, ChromaDB retrieval, controlled-PDF integrity, citation metadata, and audit logging.
 
 ## Configuration
 
@@ -96,6 +107,8 @@ Copy `.env.example` to `.env`.
 | `CONSTRUCTION_DATABASE_PATH` | `construction_mas.db` | Runtime SQLite path |
 | `CONSTRUCTION_OLLAMA_MODEL` | `llama3.1` | Installed Ollama model |
 | `CONSTRUCTION_RAG_COLLECTION_NAME` | `construction-standards` | Local vector collection |
+| `CONSTRUCTION_RAG_DOCUMENTS_PATH` | `rag_documents` | Controlled PDF sources and manifest |
+| `CONSTRUCTION_RAG_DATA_PATH` | `rag_data` | Generated chunks and future persistent index |
 
 ## Main files
 
@@ -104,6 +117,7 @@ Copy `.env.example` to `.env`.
 | `validation.py` | Rejects unsafe or incomplete inputs before the LLM |
 | `schemas.py` | Pydantic contracts and numeric constraints |
 | `rag_engine.py` | Offline ChromaDB vector retrieval |
+| `ingest_documents.py` | Verified PDF extraction and citation-ready chunk generation |
 | `design_agent.py` | Validated design extraction through Ollama |
 | `procurement_agent.py` | Unverified procurement estimates with trusted local calculations |
 | `cpm_solver.py` | NetworkX schedule and critical-path calculations |
@@ -115,7 +129,12 @@ Copy `.env.example` to `.env`.
 
 - Procurement suppliers and prices are LLM planning estimates and are stored as `PENDING_VERIFICATION` / `LLM_ESTIMATE_UNVERIFIED`.
 - Delivery dates and total costs are recalculated in Python instead of being trusted from the model.
-- Standards content is a small demonstration library; consult the controlled official publication for engineering decisions.
+- The live retriever still uses a small demonstration library. The controlled PDF ingestion
+  stage now produces page-level, source-traceable chunks, but those chunks are not connected
+  to the live retriever until the embedding and persistent-index phase is validated.
+- The included Approved Document A source applies to England and is not an Egyptian
+  compliance authority. Consult the controlled official publication and a licensed engineer
+  for engineering decisions.
 - The CPM model is a five-task demonstration schedule, not a live Primavera P6 or Microsoft Project integration.
 - The workflow is sequentially orchestrated. The agents do not autonomously negotiate or approve construction decisions.
 
