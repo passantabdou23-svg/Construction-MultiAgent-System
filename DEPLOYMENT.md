@@ -12,11 +12,13 @@ Run the application on the same workstation as Ollama. This is the cleanest conf
 4. Run `python ingest_documents.py` and confirm 4 checksummed PDFs produce 586 auditable chunks.
 5. Run `python index_documents.py` and confirm 526 retrieval-eligible chunks are persistent.
 6. Run `python evaluate_rag.py --top-k 5` and confirm Hit@5, Top-1, routing, positive acceptance, and negative rejection targets pass.
-7. Run `python -m unittest discover -s tests -v`.
-8. Run `python check_db.py` and inspect the current audit-record counts.
-9. Start the dashboard with `python -m streamlit run app.py`.
-10. Test one valid revision and one irrelevant note before the audience arrives.
-11. Explain that citations are guidance passages and quotes are estimates pending human verification.
+7. Run `python evaluate_grounding.py` and confirm supported acceptance and guard rejection both pass.
+8. Run `python -m unittest discover -s tests -v`.
+9. Run `python check_db.py` and inspect the current audit-record counts.
+10. Start the dashboard with `python -m streamlit run app.py`.
+11. Test one verified revision, one insufficient-evidence refusal, and one irrelevant note before the audience arrives.
+12. For the verified revision, confirm the persisted material rows contain only facts explicitly stated in the site note; retrieved standards must never create extra procurement items.
+13. Explain that verified citations are guidance passages and procurement quotes remain estimates pending human verification.
 
 ## Local-only launch
 
@@ -59,4 +61,5 @@ configured one.
 - Every startup corpus refresh must verify the manifest checksum, PDF page count, searchable-page count, edition, status, source-check date, jurisdiction, and official URL.
 - Rebuild the index whenever a PDF or manifest record changes; do not mix vectors produced by different embedding-model contracts.
 - Re-run the labelled evaluation after changing documents, chunking, routing keywords, semantic/lexical weights, or the confidence floor.
+- Re-run the grounding evaluation after changing prompts, claim schemas, quote-alignment rules, site-fact isolation, citation rules, or document-version policy.
 - Treat unresolved conflicts, superseded editions, out-of-jurisdiction questions, and low-confidence results as human-review conditions rather than compliance answers.

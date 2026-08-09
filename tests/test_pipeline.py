@@ -1,9 +1,11 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from agent_pipeline import run_construction_agent_pipeline
 from database import fetch_table, save_design_revision
+from grounding import GroundingRefusalError
 from validation import SiteNoteValidationError
 
 
@@ -14,18 +16,34 @@ class FakeRAG:
     def query_many(self, query):
         self.queries.append(query)
         return (
-            type("Standard", (), {"citation": "[Approved Document A, PDF p. 38]\nFoundation passage"})(),
-            type("Standard", (), {"citation": "[Approved Document A, PDF p. 39]\nSecond passage"})(),
+            SimpleNamespace(
+                chunk_id="foundation-1", document_id="approved-a", document_code="A",
+                title="Approved Document A", edition="test edition", status="current",
+                jurisdiction="England", page_number=38, printed_page_label="36",
+                section="Foundations", clause="", similarity=0.82,
+                source_url="https://example.test/a", source_sha256="a" * 64,
+                text="Strip foundation width must safely distribute wall loads to the ground.",
+                citation="[Approved Document A, PDF p. 38]\nFoundation passage",
+            ),
+            SimpleNamespace(
+                chunk_id="foundation-2", document_id="approved-a", document_code="A",
+                title="Approved Document A", edition="test edition", status="current",
+                jurisdiction="England", page_number=39, printed_page_label="37",
+                section="Foundations", clause="", similarity=0.75,
+                source_url="https://example.test/a", source_sha256="a" * 64,
+                text="Foundation design should account for the imposed building loads.",
+                citation="[Approved Document A, PDF p. 39]\nSecond passage",
+            ),
         )
 
 
 class FakeDesignAgent:
     def __init__(self, db_path):
         self.db_path = db_path
-        self.standard_context = None
+        self.evidence = None
 
-    def execute(self, note, *, standard_context, expected_revision_id):
-        self.standard_context = standard_context
+    def execute(self, note, *, evidence, expected_revision_id):
+        self.evidence = evidence
         payload = {
             "revision_id": expected_revision_id,
             "affected_element": "foundation",
@@ -40,7 +58,28 @@ class FakeDesignAgent:
             ],
         }
         save_design_revision(payload, db_path=self.db_path)
-        return payload
+        return {
+            "design": payload,
+            "grounded_claims": [
+                {
+                    "claim_id": "CLAIM-1",
+                    "claim_text": "Foundation width should safely distribute wall loads.",
+                    "citations": [
+                        {
+                            "chunk_id": "foundation-1",
+                            "evidence_quote": "Strip foundation width must safely distribute wall loads to the ground.",
+                        }
+                    ],
+                }
+            ],
+            "grounding": {
+                "status": "VERIFIED",
+                "verified_claim_count": 1,
+                "verified_citation_count": 1,
+                "cited_chunk_ids": ["foundation-1"],
+                "notes": ["Fake grounded result for orchestration testing."],
+            },
+        }
 
 
 class FakeProcurementAgent:
@@ -79,6 +118,14 @@ class FakeSchedulerAgent:
         }
 
 
+class RefusingDesignAgent:
+    def execute(self, note, *, evidence, expected_revision_id):
+        raise GroundingRefusalError(
+            "INSUFFICIENT_EVIDENCE",
+            "The retrieved passages do not support a technical design claim.",
+        )
+
+
 class PipelineSafetyTests(unittest.TestCase):
     def test_irrelevant_note_is_rejected_and_audited_before_rag_or_llm(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -112,9 +159,30 @@ class PipelineSafetyTests(unittest.TestCase):
             self.assertEqual(len(rag.queries), 1)
             self.assertIn("PDF p. 38", result["retrieved_standard"])
             self.assertIn("PDF p. 39", result["retrieved_standard"])
-            self.assertEqual(design_agent.standard_context, result["retrieved_standard"])
+            self.assertEqual(len(design_agent.evidence), 2)
+            self.assertEqual(result["grounding"]["status"], "VERIFIED")
+            self.assertEqual(result["grounded_claims"][0]["citations"][0]["chunk_id"], "foundation-1")
             runs = fetch_table("pipeline_runs", db_path=db_path)
             self.assertEqual(runs[0]["status"], "COMPLETED")
+
+    def test_grounding_refusal_stops_procurement_and_is_audited(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = str(Path(directory) / "pipeline.db")
+            with self.assertRaises(GroundingRefusalError):
+                run_construction_agent_pipeline(
+                    "Site update Rev-402: Need 25 m3 of C40 concrete for the foundation pour.",
+                    db_path=db_path,
+                    rag=FakeRAG(),
+                    design_agent=RefusingDesignAgent(),
+                    procurement_agent=FakeProcurementAgent(),
+                    scheduler_agent=FakeSchedulerAgent(),
+                )
+
+            runs = fetch_table("pipeline_runs", db_path=db_path)
+            self.assertEqual(runs[0]["status"], "REJECTED")
+            self.assertIn("INSUFFICIENT_EVIDENCE", runs[0]["error_message"])
+            self.assertEqual(fetch_table("design_revisions", db_path=db_path), [])
+            self.assertEqual(fetch_table("procurement_records", db_path=db_path), [])
 
 
 if __name__ == "__main__":

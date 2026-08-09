@@ -54,6 +54,79 @@ class DesignUpdatePayload(BaseModel):
         return self
 
 
+class EvidenceCitation(BaseModel):
+    """A verbatim passage tied to one retrieved, immutable chunk."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    chunk_id: str = Field(min_length=8, max_length=200)
+    evidence_quote: str = Field(min_length=12, max_length=600)
+
+
+class GroundedClaim(BaseModel):
+    """One technical claim with one or more explicit supporting passages."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    claim_id: str = Field(pattern=r"^CLAIM-[A-Z0-9][A-Z0-9-]{0,31}$")
+    claim_text: str = Field(min_length=12, max_length=800)
+    citations: List[EvidenceCitation] = Field(min_length=1, max_length=5)
+
+
+class GroundedDesignResponse(BaseModel):
+    """Raw model contract: either supported output or an explicit safe refusal."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    evidence_status: Literal[
+        "SUPPORTED",
+        "INSUFFICIENT_EVIDENCE",
+        "CONFLICTING_EVIDENCE",
+    ]
+    reason: str = Field(min_length=8, max_length=800)
+    design: DesignUpdatePayload | None = None
+    claims: List[GroundedClaim] = Field(default_factory=list, max_length=12)
+
+    @model_validator(mode="after")
+    def status_controls_payload(self) -> "GroundedDesignResponse":
+        if self.evidence_status == "SUPPORTED":
+            if self.design is None or not self.claims:
+                raise ValueError("SUPPORTED output requires a design and at least one grounded claim")
+        elif self.design is not None or self.claims:
+            raise ValueError("A refused output cannot contain a design or technical claims")
+        return self
+
+
+class GroundingVerification(BaseModel):
+    status: Literal["VERIFIED"] = "VERIFIED"
+    verified_claim_count: int = Field(ge=1)
+    verified_citation_count: int = Field(ge=1)
+    cited_chunk_ids: List[str] = Field(min_length=1)
+    notes: List[str] = Field(min_length=1)
+
+
+class VerifiedDesignResult(BaseModel):
+    design: DesignUpdatePayload
+    grounded_claims: List[GroundedClaim] = Field(min_length=1)
+    grounding: GroundingVerification
+
+
+class RetrievedEvidence(BaseModel):
+    chunk_id: str
+    document_id: str
+    document_code: str
+    title: str
+    edition: str
+    status: str
+    jurisdiction: str
+    page_number: int = Field(ge=1)
+    printed_page_label: str
+    section: str
+    clause: str
+    similarity: float
+    source_url: str
+
+
 class ProcurementQuote(BaseModel):
     """An unverified planning estimate produced by the local LLM."""
 
@@ -100,6 +173,9 @@ class PipelineResult(BaseModel):
     status: Literal["COMPLETED"]
     validation_message: str
     retrieved_standard: str
+    retrieved_evidence: List[RetrievedEvidence] = Field(min_length=1)
+    grounded_claims: List[GroundedClaim] = Field(min_length=1)
+    grounding: GroundingVerification
     design: DesignUpdatePayload
     procurement: ProcurementResult
     schedule: ScheduleImpact

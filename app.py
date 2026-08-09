@@ -130,6 +130,50 @@ with right:
             st.write(f"**Calculated delay:** {schedule['delay_days']} days")
             st.write(f"**Projected completion:** {schedule['projected_completion_date']}")
             st.write(f"**Quotes awaiting verification:** {len(procurement['quotes'])}")
+            st.write(f"**Grounding status:** `{latest['grounding']['status']}`")
+            st.write(
+                f"**Verified technical claims:** {latest['grounding']['verified_claim_count']} · "
+                f"**Verified citations:** {latest['grounding']['verified_citation_count']}"
+            )
+        with st.expander("Verified claims and source evidence", icon=":material/fact_check:"):
+            claim_rows = [
+                {
+                    "Claim": claim["claim_text"],
+                    "Chunk IDs": [citation["chunk_id"] for citation in claim["citations"]],
+                    "Verbatim evidence": [
+                        citation["evidence_quote"] for citation in claim["citations"]
+                    ],
+                }
+                for claim in latest["grounded_claims"]
+            ]
+            st.markdown("**Claim-level verification**")
+            st.dataframe(pd.DataFrame(claim_rows), hide_index=True, width="stretch")
+
+            evidence_frame = pd.DataFrame(latest["retrieved_evidence"])
+            evidence_columns = [
+                "document_code",
+                "section",
+                "clause",
+                "printed_page_label",
+                "page_number",
+                "similarity",
+                "status",
+                "edition",
+                "source_url",
+                "chunk_id",
+            ]
+            st.markdown("**Retrieved source register**")
+            st.dataframe(
+                evidence_frame[evidence_columns],
+                column_config={
+                    "source_url": st.column_config.LinkColumn("Official source"),
+                    "similarity": st.column_config.ProgressColumn(
+                        "Hybrid score", min_value=0.0, max_value=1.0, format="%.3f"
+                    ),
+                },
+                hide_index=True,
+                width="stretch",
+            )
         with st.expander("Inspect complete validated result", icon=":material/data_object:"):
             st.json(latest)
     else:

@@ -89,6 +89,7 @@ class RetrievedStandard:
     clause: str
     text: str
     source_url: str
+    source_sha256: str
     distance: float
     similarity: float
     semantic_similarity: float
@@ -536,6 +537,7 @@ class ConstructionRAG:
                     clause=str(metadata["clause"]),
                     text=text,
                     source_url=str(metadata["source_url"]),
+                    source_sha256=str(metadata["source_sha256"]),
                     distance=distance,
                     similarity=similarity,
                     semantic_similarity=semantic_similarity,

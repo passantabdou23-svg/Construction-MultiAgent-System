@@ -15,9 +15,16 @@ from database import (
     start_pipeline_run,
 )
 from design_agent import LocalLLMDesignAgent
+from grounding import GroundingRefusalError
 from procurement_agent import LocalLLMProcurementAgent
 from rag_engine import ConstructionRAG
-from schemas import DesignUpdatePayload, PipelineResult, ProcurementResult, ScheduleImpact
+from schemas import (
+    PipelineResult,
+    ProcurementResult,
+    RetrievedEvidence,
+    ScheduleImpact,
+    VerifiedDesignResult,
+)
 from validation import SiteNoteValidationError, validate_site_note
 
 
@@ -110,14 +117,33 @@ def run_construction_agent_pipeline(
         rag_engine = rag or ConstructionRAG()
         standards = rag_engine.query_many(validated_note.text)
         standard_context = "\n\n".join(standard.citation for standard in standards)
+        retrieved_evidence = [
+            RetrievedEvidence(
+                chunk_id=standard.chunk_id,
+                document_id=standard.document_id,
+                document_code=standard.document_code,
+                title=standard.title,
+                edition=standard.edition,
+                status=standard.status,
+                jurisdiction=standard.jurisdiction,
+                page_number=standard.page_number,
+                printed_page_label=standard.printed_page_label,
+                section=standard.section,
+                clause=standard.clause,
+                similarity=standard.similarity,
+                source_url=standard.source_url,
+            )
+            for standard in standards
+        ]
 
         design_executor = design_agent or LocalLLMDesignAgent(db_path=db_path)
-        design_data = design_executor.execute(
+        verified_design_data = design_executor.execute(
             validated_note.text,
-            standard_context=standard_context,
+            evidence=standards,
             expected_revision_id=validated_note.revision_id,
         )
-        design = DesignUpdatePayload.model_validate(design_data)
+        verified_design = VerifiedDesignResult.model_validate(verified_design_data)
+        design = verified_design.design
         revision_id = design.revision_id
 
         procurement_executor = procurement_agent or LocalLLMProcurementAgent(db_path=db_path)
@@ -133,8 +159,14 @@ def run_construction_agent_pipeline(
         result = PipelineResult(
             run_id=run_id,
             status="COMPLETED",
-            validation_message="Input and all agent outputs passed deterministic schema checks.",
+            validation_message=(
+                "Input, site-note facts, grounded claims, citations, and all agent outputs passed "
+                "deterministic verification."
+            ),
             retrieved_standard=standard_context,
+            retrieved_evidence=retrieved_evidence,
+            grounded_claims=verified_design.grounded_claims,
+            grounding=verified_design.grounding,
             design=design,
             procurement=ProcurementResult.model_validate(procurement_data),
             schedule=ScheduleImpact.model_validate(schedule_data),
@@ -146,7 +178,7 @@ def run_construction_agent_pipeline(
             db_path=db_path,
         )
         return result.model_dump(mode="json")
-    except SiteNoteValidationError as error:
+    except (SiteNoteValidationError, GroundingRefusalError) as error:
         finish_pipeline_run(run_id, "REJECTED", error_message=str(error), db_path=db_path)
         raise
     except Exception as error:
