@@ -16,6 +16,10 @@ class AppSettings(BaseSettings):
     rag_collection_name: str = "construction-standards"
     rag_documents_path: str = "rag_documents"
     rag_data_path: str = "rag_data"
+    rag_chunks_path: str = "rag_data/chunks.jsonl"
+    rag_index_path: str = "rag_data/chroma"
+    rag_top_k: int = Field(default=3, ge=1, le=20)
+    rag_minimum_similarity: float = Field(default=0.45, ge=0, le=1)
     maximum_site_note_characters: int = Field(default=4_000, ge=100, le=20_000)
 
 

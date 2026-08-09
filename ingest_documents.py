@@ -58,6 +58,7 @@ class SourceDocument:
     expected_sha256: str
     expected_pages: int
     expected_text_pages: int
+    retrieval_excluded_pages: tuple[int, ...]
     usage_note: str
 
 
@@ -70,6 +71,7 @@ class DocumentChunk:
     publication_date: str
     jurisdiction: str
     page_number: int
+    printed_page_label: str
     section: str
     clause: str
     text: str
@@ -78,13 +80,17 @@ class DocumentChunk:
     license_name: str
     license_url: str
     source_sha256: str
+    retrieval_eligible: bool
 
     @property
     def citation(self) -> str:
         location = self.section or "Unsectioned content"
         if self.clause:
             location = f"{location}, clause {self.clause}"
-        return f"{self.title} ({self.edition}), {location}, p. {self.page_number}"
+        page = f"PDF p. {self.page_number}"
+        if self.printed_page_label:
+            page = f"printed p. {self.printed_page_label} ({page})"
+        return f"{self.title} ({self.edition}), {location}, {page}"
 
     def to_json_record(self) -> dict[str, Any]:
         record = asdict(self)
@@ -115,6 +121,12 @@ class _TextUnit:
     section: str
     clause: str
     text: str
+
+
+@dataclass(frozen=True)
+class _ExtractedPage:
+    lines: tuple[str, ...]
+    printed_page_label: str
 
 
 def _required_string(entry: dict[str, Any], key: str) -> str:
@@ -170,6 +182,20 @@ def load_manifest(manifest_path: str | Path) -> tuple[SourceDocument, ...]:
             raise ManifestError(
                 f"expected_text_pages must be between 1 and expected_pages: {document_id}"
             )
+        retrieval_excluded_pages = entry.get("retrieval_excluded_pages", [])
+        if (
+            not isinstance(retrieval_excluded_pages, list)
+            or any(
+                not isinstance(page, int)
+                or isinstance(page, bool)
+                or not 1 <= page <= expected_pages
+                for page in retrieval_excluded_pages
+            )
+            or len(set(retrieval_excluded_pages)) != len(retrieval_excluded_pages)
+        ):
+            raise ManifestError(
+                f"retrieval_excluded_pages must contain unique valid PDF pages: {document_id}"
+            )
 
         documents.append(
             SourceDocument(
@@ -186,6 +212,7 @@ def load_manifest(manifest_path: str | Path) -> tuple[SourceDocument, ...]:
                 expected_sha256=sha256,
                 expected_pages=expected_pages,
                 expected_text_pages=expected_text_pages,
+                retrieval_excluded_pages=tuple(sorted(retrieval_excluded_pages)),
                 usage_note=_required_string(entry, "usage_note"),
             )
         )
@@ -276,12 +303,12 @@ def _looks_like_section(line: str) -> bool:
     return uppercase_ratio >= 0.88 and len(line.split()) <= 12
 
 
-def _extract_raw_pages(path: Path) -> list[list[str]]:
+def _extract_raw_pages(path: Path) -> list[_ExtractedPage]:
     """Extract clean words while preserving left-column then right-column reading order."""
     previous_level = logging.getLogger("pdfminer").level
     logging.getLogger("pdfminer").setLevel(logging.ERROR)
     try:
-        page_lines: list[list[str]] = []
+        extracted_pages: list[_ExtractedPage] = []
         layouts = extract_pages(str(path), laparams=LAParams(boxes_flow=None))
         for layout in layouts:
             boxes = [element for element in layout if isinstance(element, LTTextContainer)]
@@ -294,9 +321,19 @@ def _extract_raw_pages(path: Path) -> list[list[str]]:
                 (box for box in boxes if float(box.x0) >= midpoint),
                 key=lambda box: (-float(box.y1), float(box.x0)),
             )
+            footer_labels = [
+                box.get_text().strip()
+                for box in boxes
+                if float(box.y1) < 50 and re.fullmatch(r"\d{1,3}", box.get_text().strip())
+            ]
             text = "\n\n".join(box.get_text().strip() for box in left_column + right_column)
-            page_lines.append(text.splitlines())
-        return page_lines
+            extracted_pages.append(
+                _ExtractedPage(
+                    lines=tuple(text.splitlines()),
+                    printed_page_label=footer_labels[0] if len(footer_labels) == 1 else "",
+                )
+            )
+        return extracted_pages
     finally:
         logging.getLogger("pdfminer").setLevel(previous_level)
 
@@ -398,6 +435,7 @@ def _make_chunk(
     document: SourceDocument,
     source_sha256: str,
     page_number: int,
+    printed_page_label: str,
     section: str,
     clause: str,
     text: str,
@@ -415,6 +453,7 @@ def _make_chunk(
         publication_date=document.publication_date,
         jurisdiction=document.jurisdiction,
         page_number=page_number,
+        printed_page_label=printed_page_label,
         section=section,
         clause=clause,
         text=text,
@@ -423,6 +462,7 @@ def _make_chunk(
         license_name=document.license_name,
         license_url=document.license_url,
         source_sha256=source_sha256,
+        retrieval_eligible=page_number not in document.retrieval_excluded_pages,
     )
 
 
@@ -446,12 +486,13 @@ def ingest_document(
             f"expected {document.expected_pages}, received {len(reader.pages)}"
         )
 
-    raw_pages = _extract_raw_pages(document.file_path)
-    if len(raw_pages) != len(reader.pages):
+    extracted_pages = _extract_raw_pages(document.file_path)
+    if len(extracted_pages) != len(reader.pages):
         raise SourceIntegrityError(
             f"Extractor page-count mismatch for {document.document_id}: "
-            f"PDF has {len(reader.pages)}, extractor returned {len(raw_pages)}"
+            f"PDF has {len(reader.pages)}, extractor returned {len(extracted_pages)}"
         )
+    raw_pages = [list(page.lines) for page in extracted_pages]
     repeated_lines = _repeated_page_lines(raw_pages)
     chunks: list[DocumentChunk] = []
     nonempty_pages = 0
@@ -460,6 +501,7 @@ def ingest_document(
     current_clause = ""
 
     for page_number, raw_lines in enumerate(raw_pages, start=1):
+        printed_page_label = extracted_pages[page_number - 1].printed_page_label
         lines = _clean_page_lines(raw_lines, repeated_lines)
         if lines:
             nonempty_pages += 1
@@ -476,6 +518,7 @@ def ingest_document(
                         document,
                         source_sha256,
                         page_number,
+                        printed_page_label,
                         unit.section,
                         unit.clause,
                         part,

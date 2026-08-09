@@ -108,12 +108,13 @@ def run_construction_agent_pipeline(
     try:
         validated_note = validate_site_note(raw_note)
         rag_engine = rag or ConstructionRAG()
-        standard = rag_engine.query(validated_note.text)
+        standards = rag_engine.query_many(validated_note.text)
+        standard_context = "\n\n".join(standard.citation for standard in standards)
 
         design_executor = design_agent or LocalLLMDesignAgent(db_path=db_path)
         design_data = design_executor.execute(
             validated_note.text,
-            standard_context=standard.citation,
+            standard_context=standard_context,
             expected_revision_id=validated_note.revision_id,
         )
         design = DesignUpdatePayload.model_validate(design_data)
@@ -133,7 +134,7 @@ def run_construction_agent_pipeline(
             run_id=run_id,
             status="COMPLETED",
             validation_message="Input and all agent outputs passed deterministic schema checks.",
-            retrieved_standard=standard.citation,
+            retrieved_standard=standard_context,
             design=design,
             procurement=ProcurementResult.model_validate(procurement_data),
             schedule=ScheduleImpact.model_validate(schedule_data),

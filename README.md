@@ -7,7 +7,7 @@ A private, local proof-of-concept that turns a controlled construction revision 
 ## What the system does
 
 1. Rejects irrelevant, ambiguous, contradictory, or incomplete notes before calling the LLM.
-2. Retrieves a relevant demonstration reference from a local ChromaDB vector index.
+2. Retrieves top-k cited passages from a persistent local ChromaDB index and refuses low-confidence matches.
 3. Uses a local Ollama design agent to extract a validated revision and one or more material requirements.
 4. Uses a local procurement agent to produce clearly labelled **unverified estimates**.
 5. Recalculates arithmetic and delivery dates deterministically in Python.
@@ -60,6 +60,21 @@ The command verifies each PDF checksum and page count before creating
 section or clause when detected, page number, official source URL, licence, and source
 checksum. `rag_data/` is generated locally and is intentionally not committed.
 
+Build the persistent vector index and run the labelled retrieval evaluation:
+
+```powershell
+python index_documents.py
+python evaluate_rag.py
+```
+
+The first index build uses Chroma's local `all-MiniLM-L6-v2` ONNX embedding model
+(384 dimensions) and may download approximately 80 MB into the user's model cache.
+No hosted embedding API or API key is required. The index is stored under
+`rag_data/chroma` and is reused across application restarts. Re-running
+`index_documents.py` is idempotent when the controlled JSONL content has not changed.
+The collection contract records both the embedding model identity and its artifact SHA-256;
+an incompatible persisted collection is rejected rather than silently mixed.
+
 Install and prepare Ollama:
 
 ```powershell
@@ -96,7 +111,7 @@ python -m unittest discover -s tests -v
 python -m unittest test_stress_cases -v
 ```
 
-The suite verifies input rejection, Pydantic contracts, multiple-material storage, foreign-key enforcement, trusted procurement arithmetic and dates, CPM calculations, ChromaDB retrieval, controlled-PDF integrity, citation metadata, and audit logging.
+The suite verifies input rejection, Pydantic contracts, multiple-material storage, foreign-key enforcement, trusted procurement arithmetic and dates, CPM calculations, persistent ChromaDB retrieval, controlled-PDF integrity, citation metadata, confidence rejection, compatibility safeguards, and audit logging.
 
 ## Configuration
 
@@ -108,7 +123,11 @@ Copy `.env.example` to `.env`.
 | `CONSTRUCTION_OLLAMA_MODEL` | `llama3.1` | Installed Ollama model |
 | `CONSTRUCTION_RAG_COLLECTION_NAME` | `construction-standards` | Local vector collection |
 | `CONSTRUCTION_RAG_DOCUMENTS_PATH` | `rag_documents` | Controlled PDF sources and manifest |
-| `CONSTRUCTION_RAG_DATA_PATH` | `rag_data` | Generated chunks and future persistent index |
+| `CONSTRUCTION_RAG_DATA_PATH` | `rag_data` | Generated chunks, index, and evaluation reports |
+| `CONSTRUCTION_RAG_CHUNKS_PATH` | `rag_data/chunks.jsonl` | Verified citation-ready ingestion output |
+| `CONSTRUCTION_RAG_INDEX_PATH` | `rag_data/chroma` | Persistent local ChromaDB directory |
+| `CONSTRUCTION_RAG_TOP_K` | `3` | Maximum cited passages supplied to the design agent |
+| `CONSTRUCTION_RAG_MINIMUM_SIMILARITY` | `0.45` | Calibrated cosine-similarity acceptance floor |
 
 ## Main files
 
@@ -116,8 +135,10 @@ Copy `.env.example` to `.env`.
 |---|---|
 | `validation.py` | Rejects unsafe or incomplete inputs before the LLM |
 | `schemas.py` | Pydantic contracts and numeric constraints |
-| `rag_engine.py` | Offline ChromaDB vector retrieval |
+| `rag_engine.py` | Persistent ChromaDB retrieval, citations, and confidence rejection |
 | `ingest_documents.py` | Verified PDF extraction and citation-ready chunk generation |
+| `index_documents.py` | Idempotent local MiniLM embedding and persistent indexing |
+| `evaluate_rag.py` | Labelled Hit@k, MRR, acceptance, and rejection evaluation |
 | `design_agent.py` | Validated design extraction through Ollama |
 | `procurement_agent.py` | Unverified procurement estimates with trusted local calculations |
 | `cpm_solver.py` | NetworkX schedule and critical-path calculations |
@@ -129,9 +150,10 @@ Copy `.env.example` to `.env`.
 
 - Procurement suppliers and prices are LLM planning estimates and are stored as `PENDING_VERIFICATION` / `LLM_ESTIMATE_UNVERIFIED`.
 - Delivery dates and total costs are recalculated in Python instead of being trusted from the model.
-- The live retriever still uses a small demonstration library. The controlled PDF ingestion
-  stage now produces page-level, source-traceable chunks, but those chunks are not connected
-  to the live retriever until the embedding and persistent-index phase is validated.
+- The live retriever uses the controlled PDF chunks, local trained MiniLM embeddings,
+  persistent ChromaDB storage, top-k citations, and a calibrated confidence threshold.
+- The current labelled set has six in-scope and six out-of-scope questions. Passing it
+  demonstrates this controlled corpus and query set; it is not a general compliance benchmark.
 - The included Approved Document A source applies to England and is not an Egyptian
   compliance authority. Consult the controlled official publication and a licensed engineer
   for engineering decisions.

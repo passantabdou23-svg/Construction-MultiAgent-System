@@ -40,7 +40,7 @@ class DocumentIngestionTests(unittest.TestCase):
             self.assertLessEqual(chunk.page_number, 54)
             self.assertEqual(chunk.document_id, self.document.document_id)
             self.assertEqual(chunk.source_sha256, self.document.expected_sha256)
-            self.assertIn(f"p. {chunk.page_number}", chunk.citation)
+            self.assertIn(f"PDF p. {chunk.page_number}", chunk.citation)
             self.assertEqual(chunk.source_url, self.document.source_url)
         sections = {chunk.section for chunk in self.result.chunks}
         self.assertNotIn("S = V × O × A", sections)
@@ -53,6 +53,17 @@ class DocumentIngestionTests(unittest.TestCase):
         self.assertIn("requirements of A1 and A2", clause_chunk.text)
         self.assertIn("Secretary of State", clause_chunk.text)
         self.assertNotIn("Secr etary", clause_chunk.text)
+        self.assertEqual(clause_chunk.page_number, 8)
+        self.assertEqual(clause_chunk.printed_page_label, "6")
+        self.assertIn("printed p. 6 (PDF p. 8)", clause_chunk.citation)
+
+    def test_manifest_exclusions_keep_audit_chunks_out_of_retrieval(self):
+        self.assertEqual(self.document.retrieval_excluded_pages, (1, 3, 4, 53, 54))
+        for chunk in self.result.chunks:
+            self.assertEqual(
+                chunk.retrieval_eligible,
+                chunk.page_number not in self.document.retrieval_excluded_pages,
+            )
 
     def test_jsonl_output_is_deterministic_and_auditable(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
