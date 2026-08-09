@@ -38,11 +38,14 @@ with st.sidebar:
     st.badge("Local processing", icon=":material/lock:", color="green")
     st.write(f"**Model:** `{settings.ollama_model}`")
     st.write(f"**Database:** `{settings.database_path}`")
+    st.write("**Embeddings:** `all-MiniLM-L6-v2` (local)")
+    st.write(f"**RAG index:** `{settings.rag_index_path}`")
+    st.write(f"**RAG confidence floor:** `{settings.rag_minimum_similarity:.2f}`")
     st.caption("Configuration can be changed through CONSTRUCTION_* environment variables.")
     with st.expander("Decision boundaries", icon=":material/policy:"):
         st.markdown(
             "- Supplier and cost outputs are planning estimates requiring human verification.\n"
-            "- Retrieved standards are demonstration summaries, not compliance certificates.\n"
+            "- Retrieved passages come from controlled documents with page citations; they are not compliance certificates.\n"
             "- CPM uses the project demonstration schedule, not a live Primavera/MS Project file."
         )
 
