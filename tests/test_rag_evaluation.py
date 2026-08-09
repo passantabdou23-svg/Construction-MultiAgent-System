@@ -11,6 +11,12 @@ def _candidate(page: int, similarity: float) -> RetrievedStandard:
         title="Approved Document A",
         edition="test edition",
         jurisdiction="England",
+        document_code="A",
+        discipline="structure",
+        authority="Test authority",
+        status="current",
+        source_checked_date="2026-08-09",
+        effective_date="",
         page_number=page,
         printed_page_label=str(page - 2),
         section="Foundations",
@@ -19,6 +25,9 @@ def _candidate(page: int, similarity: float) -> RetrievedStandard:
         source_url="https://example.test/source",
         distance=1 - similarity,
         similarity=similarity,
+        semantic_similarity=similarity,
+        lexical_similarity=0.0,
+        routing_reason="Test route",
     )
 
 
@@ -47,6 +56,7 @@ class RAGEvaluationTests(unittest.TestCase):
                     "kind": "positive",
                     "query": "in scope",
                     "expected_document_id": "approved-a",
+                    "expected_document_code": "A",
                     "expected_pdf_pages": [38],
                 },
                 {"id": "negative", "kind": "negative", "query": "out of scope"},
@@ -59,6 +69,7 @@ class RAGEvaluationTests(unittest.TestCase):
         self.assertEqual(report["metrics"]["hit_at_k"], 1.0)
         self.assertEqual(report["metrics"]["top_1_accuracy"], 1.0)
         self.assertEqual(report["metrics"]["negative_rejection_rate"], 1.0)
+        self.assertEqual(report["metrics"]["routing_accuracy"], 1.0)
 
     def test_both_positive_and_negative_cases_are_required(self):
         evaluation = {
@@ -68,6 +79,7 @@ class RAGEvaluationTests(unittest.TestCase):
                     "kind": "positive",
                     "query": "in scope",
                     "expected_document_id": "approved-a",
+                    "expected_document_code": "A",
                     "expected_pdf_pages": [38],
                 }
             ]

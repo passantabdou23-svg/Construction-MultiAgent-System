@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import re
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -74,6 +77,12 @@ class RetrievedStandard:
     title: str
     edition: str
     jurisdiction: str
+    document_code: str
+    discipline: str
+    authority: str
+    status: str
+    source_checked_date: str
+    effective_date: str
     page_number: int
     printed_page_label: str
     section: str
@@ -82,6 +91,9 @@ class RetrievedStandard:
     source_url: str
     distance: float
     similarity: float
+    semantic_similarity: float
+    lexical_similarity: float
+    routing_reason: str
 
     @property
     def citation_label(self) -> str:
@@ -91,18 +103,29 @@ class RetrievedStandard:
         page = f"PDF p. {self.page_number}"
         if self.printed_page_label:
             page = f"printed p. {self.printed_page_label} ({page})"
-        return f"{self.title} ({self.edition}), {location}, {page}"
+        governance = f"{self.edition}; {self.jurisdiction}; status={self.status}"
+        if self.effective_date:
+            governance = f"{governance}; effective={self.effective_date}"
+        return f"{self.title} ({governance}), {location}, {page}"
 
     @property
     def citation(self) -> str:
         return (
-            f"[{self.citation_label}; similarity={self.similarity:.3f}]\n"
+            f"[{self.citation_label}; hybrid={self.similarity:.3f}; "
+            f"semantic={self.semantic_similarity:.3f}; lexical={self.lexical_similarity:.3f}]\n"
             f"{self.text}\nSource: {self.source_url}"
         )
 
 
 _CHUNK_METADATA_FIELDS = (
     "document_id",
+    "document_code",
+    "discipline",
+    "authority",
+    "status",
+    "source_checked_date",
+    "effective_date",
+    "routing_keywords",
     "title",
     "edition",
     "publication_date",
@@ -119,6 +142,33 @@ _CHUNK_METADATA_FIELDS = (
     "citation",
     "retrieval_eligible",
 )
+
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_STOP_WORDS = frozenset(
+    "a an and are as at be by for from how in into is it of on or should the to what when where which with".split()
+)
+
+
+@dataclass(frozen=True)
+class RoutingDecision:
+    document_ids: tuple[str, ...]
+    document_codes: tuple[str, ...]
+    matched_keywords: tuple[str, ...]
+    reason: str
+    out_of_scope: bool = False
+
+
+def _tokens(text: str) -> tuple[str, ...]:
+    return tuple(token for token in _TOKEN_RE.findall(text.casefold()) if token not in _STOP_WORDS)
+
+
+def _cosine_similarity(left: list[float], right: list[float]) -> float:
+    numerator = sum(a * b for a, b in zip(left, right))
+    left_norm = math.sqrt(sum(value * value for value in left))
+    right_norm = math.sqrt(sum(value * value for value in right))
+    if not left_norm or not right_norm:
+        return 0.0
+    return float(max(-1.0, min(1.0, numerator / (left_norm * right_norm))))
 
 
 def _file_sha256(path: Path) -> str:
@@ -208,6 +258,8 @@ class ConstructionRAG:
         embedding_model_sha256: str = EMBEDDING_MODEL_SHA256,
         minimum_similarity: float | None = None,
         top_k: int | None = None,
+        semantic_weight: float | None = None,
+        lexical_weight: float | None = None,
         auto_index: bool = True,
     ):
         self.collection_name = collection_name or settings.rag_collection_name
@@ -219,10 +271,16 @@ class ConstructionRAG:
             else minimum_similarity
         )
         self.top_k = settings.rag_top_k if top_k is None else top_k
+        self.semantic_weight = settings.rag_semantic_weight if semantic_weight is None else semantic_weight
+        self.lexical_weight = settings.rag_lexical_weight if lexical_weight is None else lexical_weight
         if not 0 <= self.minimum_similarity <= 1:
             raise ValueError("minimum_similarity must be between 0 and 1")
         if not 1 <= self.top_k <= 20:
             raise ValueError("top_k must be between 1 and 20")
+        if self.semantic_weight < 0 or self.lexical_weight < 0:
+            raise ValueError("retrieval weights cannot be negative")
+        if not math.isclose(self.semantic_weight + self.lexical_weight, 1.0, abs_tol=1e-9):
+            raise ValueError("semantic_weight and lexical_weight must sum to 1")
 
         self.embedding_function = embedding_function or ONNXMiniLM_L6_V2()
         self.embedding_function_name = self.embedding_function.name()
@@ -341,6 +399,83 @@ class ConstructionRAG:
             unchanged=False,
         )
 
+    def route_query(self, query: str) -> RoutingDecision:
+        normalized_query = (query or "").strip().casefold()
+        if not normalized_query:
+            raise ValueError("RAG query cannot be empty")
+        out_of_scope_patterns = (
+            r"\b(?:price|cost|supplier|vendor|phone|telephone|weather)\b",
+            r"\b(?:permit|licen[cs]e)\s+fees?\b",
+            r"\b(?:egypt|egyptian|cairo)\b",
+        )
+        out_of_scope = any(re.search(pattern, normalized_query) for pattern in out_of_scope_patterns)
+        records = self.collection.get(include=["metadatas"])
+        documents: dict[str, tuple[str, tuple[str, ...]]] = {}
+        for metadata in records["metadatas"]:
+            if metadata is None:
+                continue
+            document_id = str(metadata["document_id"])
+            keywords = tuple(
+                keyword.strip().casefold()
+                for keyword in str(metadata.get("routing_keywords", "")).split("|")
+                if keyword.strip()
+            )
+            documents[document_id] = (str(metadata.get("document_code", "")), keywords)
+        matched: dict[str, set[str]] = {}
+        for document_id, (_, keywords) in documents.items():
+            for keyword in keywords:
+                pattern = rf"(?<![a-z0-9]){re.escape(keyword)}(?![a-z0-9])"
+                if re.search(pattern, normalized_query):
+                    matched.setdefault(document_id, set()).add(keyword)
+        if not matched:
+            reason = "No discipline keyword matched; searched all controlled documents"
+            if out_of_scope:
+                reason = "Query contains commercial or out-of-jurisdiction terms outside the controlled corpus"
+            return RoutingDecision((), (), (), reason, out_of_scope)
+        route_strength = {
+            document_id: sum(max(1, len(_tokens(keyword))) for keyword in keywords)
+            for document_id, keywords in matched.items()
+        }
+        strongest = max(route_strength.values())
+        document_ids = tuple(
+            sorted(document_id for document_id, strength in route_strength.items() if strength == strongest)
+        )
+        codes = tuple(documents[document_id][0] for document_id in document_ids)
+        keywords = tuple(sorted({keyword for document_id in document_ids for keyword in matched[document_id]}))
+        reason = f"Routed by keywords: {', '.join(keywords)}"
+        if out_of_scope:
+            reason = f"{reason}; scope guard detected unsupported commercial or jurisdictional intent"
+        return RoutingDecision(document_ids, codes, keywords, reason, out_of_scope)
+
+    @staticmethod
+    def _bm25_scores(query: str, documents: list[str]) -> list[float]:
+        query_terms = tuple(dict.fromkeys(_tokens(query)))
+        if not query_terms or not documents:
+            return [0.0] * len(documents)
+        tokenized = [_tokens(document) for document in documents]
+        average_length = sum(len(tokens) for tokens in tokenized) / len(tokenized) or 1.0
+        document_frequency = {
+            term: sum(term in set(tokens) for tokens in tokenized) for term in query_terms
+        }
+        raw_scores: list[float] = []
+        k1, b = 1.5, 0.75
+        for tokens in tokenized:
+            counts = Counter(tokens)
+            score = 0.0
+            for term in query_terms:
+                frequency = counts[term]
+                if not frequency:
+                    continue
+                frequency_documents = document_frequency[term]
+                inverse_frequency = math.log(
+                    1 + (len(tokenized) - frequency_documents + 0.5) / (frequency_documents + 0.5)
+                )
+                denominator = frequency + k1 * (1 - b + b * len(tokens) / average_length)
+                score += inverse_frequency * frequency * (k1 + 1) / denominator
+            raw_scores.append(score)
+        maximum = max(raw_scores, default=0.0)
+        return [score / maximum if maximum else 0.0 for score in raw_scores]
+
     def query_candidates(self, query: str, n_results: int | None = None) -> tuple[RetrievedStandard, ...]:
         normalized_query = (query or "").strip()
         if not normalized_query:
@@ -353,23 +488,35 @@ class ConstructionRAG:
         requested = self.top_k if n_results is None else n_results
         if not 1 <= requested <= 20:
             raise ValueError("n_results must be between 1 and 20")
-        result = self.collection.query(
-            query_texts=[normalized_query],
-            n_results=min(requested, count),
-            include=["documents", "metadatas", "distances"],
-        )
+        routing = self.route_query(normalized_query)
+        result = self.collection.get(include=["documents", "metadatas", "embeddings"])
+        rows = [
+            (chunk_id, text, metadata, embedding)
+            for chunk_id, text, metadata, embedding in zip(
+                result["ids"], result["documents"], result["metadatas"], result["embeddings"]
+            )
+            if metadata is not None
+            and (not routing.document_ids or str(metadata["document_id"]) in routing.document_ids)
+        ]
+        if not rows:
+            raise RAGIndexError("Document routing produced no indexed candidates")
+        query_embedding = list(self.embedding_function([normalized_query])[0])
+        lexical_scores = self._bm25_scores(normalized_query, [str(row[1]) for row in rows])
 
         candidates: list[RetrievedStandard] = []
-        for chunk_id, text, metadata, distance_value in zip(
-            result["ids"][0],
-            result["documents"][0],
-            result["metadatas"][0],
-            result["distances"][0],
-        ):
-            if text is None or metadata is None or distance_value is None:
+        for (chunk_id, text, metadata, embedding), lexical_similarity in zip(rows, lexical_scores):
+            if text is None or metadata is None or embedding is None:
                 raise RAGIndexError("Chroma returned an incomplete retrieval record")
-            distance = float(distance_value)
-            similarity = max(-1.0, min(1.0, 1.0 - distance))
+            semantic_similarity = _cosine_similarity(query_embedding, list(embedding))
+            distance = 1.0 - semantic_similarity
+            similarity = float(
+                self.semantic_weight * max(0.0, semantic_similarity)
+                + self.lexical_weight * lexical_similarity
+            )
+            if not routing.document_ids:
+                similarity *= 0.75
+            if routing.out_of_scope:
+                similarity *= 0.50
             candidates.append(
                 RetrievedStandard(
                     chunk_id=chunk_id,
@@ -377,6 +524,12 @@ class ConstructionRAG:
                     title=str(metadata["title"]),
                     edition=str(metadata["edition"]),
                     jurisdiction=str(metadata["jurisdiction"]),
+                    document_code=str(metadata["document_code"]),
+                    discipline=str(metadata["discipline"]),
+                    authority=str(metadata["authority"]),
+                    status=str(metadata["status"]),
+                    source_checked_date=str(metadata["source_checked_date"]),
+                    effective_date=str(metadata["effective_date"]),
                     page_number=int(metadata["page_number"]),
                     printed_page_label=str(metadata.get("printed_page_label", "")),
                     section=str(metadata["section"]),
@@ -385,9 +538,13 @@ class ConstructionRAG:
                     source_url=str(metadata["source_url"]),
                     distance=distance,
                     similarity=similarity,
+                    semantic_similarity=semantic_similarity,
+                    lexical_similarity=lexical_similarity,
+                    routing_reason=routing.reason,
                 )
             )
-        return tuple(candidates)
+        candidates.sort(key=lambda candidate: (-candidate.similarity, candidate.chunk_id))
+        return tuple(candidates[:requested])
 
     def query_many(
         self,

@@ -29,7 +29,7 @@ def load_table(table_name: str) -> pd.DataFrame:
 
 st.title("Construction multi-agent control centre")
 st.caption(
-    "Local Ollama workflow with deterministic validation, vector retrieval, "
+    "Local Ollama workflow with deterministic validation, routed hybrid retrieval, "
     "procurement planning, CPM impact analysis, and SQLite audit lineage."
 )
 
@@ -39,6 +39,11 @@ with st.sidebar:
     st.write(f"**Model:** `{settings.ollama_model}`")
     st.write(f"**Database:** `{settings.database_path}`")
     st.write("**Embeddings:** `all-MiniLM-L6-v2` (local)")
+    st.write("**Controlled corpus:** `A · C · K · 7` (England)")
+    st.write(
+        f"**Retrieval blend:** `{settings.rag_semantic_weight:.0%}` semantic · "
+        f"`{settings.rag_lexical_weight:.0%}` lexical"
+    )
     st.write(f"**RAG index:** `{settings.rag_index_path}`")
     st.write(f"**RAG confidence floor:** `{settings.rag_minimum_similarity:.2f}`")
     st.caption("Configuration can be changed through CONSTRUCTION_* environment variables.")
@@ -46,6 +51,7 @@ with st.sidebar:
         st.markdown(
             "- Supplier and cost outputs are planning estimates requiring human verification.\n"
             "- Retrieved passages come from controlled documents with page citations; they are not compliance certificates.\n"
+            "- Document routing is discipline-aware; unsupported commercial and non-England compliance requests are rejected.\n"
             "- CPM uses the project demonstration schedule, not a live Primavera/MS Project file."
         )
 
