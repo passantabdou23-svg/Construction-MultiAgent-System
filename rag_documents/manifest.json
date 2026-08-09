@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "documents": [
+    {
+      "document_id": "uk-approved-document-a-structure-2013",
+      "file": "UK_Approved_Document_A_Structure_2013.pdf",
+      "title": "Approved Document A: Structure",
+      "edition": "2004 edition incorporating 2004, 2010 and 2013 amendments",
+      "publication_date": "2013-09-01",
+      "jurisdiction": "England",
+      "source_url": "https://www.gov.uk/government/publications/structure-approved-document-a",
+      "download_url": "https://assets.publishing.service.gov.uk/media/5a80437640f0b623026927b2/BR_PDF_AD_A_2013.pdf",
+      "license_name": "Open Government Licence v3.0",
+      "license_url": "https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/",
+      "sha256": "96a5a374adbb1832b8c84338ac923976490806646c05e078d9c946d4c9921040",
+      "expected_pages": 54,
+      "expected_text_pages": 53,
+      "usage_note": "Official England guidance used to develop and evaluate retrieval. It is not an Egyptian compliance authority."
+    }
+  ]
+}

@@ -6,6 +6,7 @@ __pycache__/
 .pytest_cache/
 .coverage
 htmlcov/
+rag_data/
 .streamlit/secrets.toml
 .vscode/
 .idea/

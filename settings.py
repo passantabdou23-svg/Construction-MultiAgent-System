@@ -14,6 +14,8 @@ class AppSettings(BaseSettings):
     database_path: str = "construction_mas.db"
     ollama_model: str = "llama3.1"
     rag_collection_name: str = "construction-standards"
+    rag_documents_path: str = "rag_documents"
+    rag_data_path: str = "rag_data"
     maximum_site_note_characters: int = Field(default=4_000, ge=100, le=20_000)
 
 
