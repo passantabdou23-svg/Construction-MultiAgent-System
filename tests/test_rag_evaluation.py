@@ -23,6 +23,7 @@ def _candidate(page: int, similarity: float) -> RetrievedStandard:
         clause="",
         text="Controlled test passage.",
         source_url="https://example.test/source",
+        source_sha256="a" * 64,
         distance=1 - similarity,
         similarity=similarity,
         semantic_similarity=similarity,

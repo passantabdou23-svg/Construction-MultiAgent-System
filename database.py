@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import json
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Sequence
@@ -117,6 +118,9 @@ def init_db(db_path: str | Path = DB_NAME) -> None:
             ("source_note", "TEXT"),
             ("standard_reference", "TEXT"),
             ("validation_status", "TEXT NOT NULL DEFAULT 'VALIDATED'"),
+            ("grounding_status", "TEXT NOT NULL DEFAULT 'UNVERIFIED_LEGACY'"),
+            ("grounded_claims_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ("citation_verification_json", "TEXT NOT NULL DEFAULT '{}'"),
         ):
             _add_column_if_missing(connection, "design_revisions", name, declaration)
 
@@ -159,6 +163,9 @@ def save_design_revision(
     *,
     source_note: str = "",
     standard_reference: str = "",
+    grounding_status: str = "UNVERIFIED_LEGACY",
+    grounded_claims: Sequence[dict[str, Any]] | None = None,
+    citation_verification: dict[str, Any] | None = None,
     db_path: str | Path = DB_NAME,
 ) -> None:
     requirements = data["requirements"]
@@ -168,8 +175,9 @@ def save_design_revision(
             """
             INSERT INTO design_revisions (
                 revision_id, affected_element, item_id, material_type, specification,
-                quantity, unit, source_note, standard_reference, validation_status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'VALIDATED')
+                quantity, unit, source_note, standard_reference, validation_status,
+                grounding_status, grounded_claims_json, citation_verification_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'VALIDATED', ?, ?, ?)
             ON CONFLICT(revision_id) DO UPDATE SET
                 affected_element = excluded.affected_element,
                 item_id = excluded.item_id,
@@ -180,6 +188,9 @@ def save_design_revision(
                 source_note = excluded.source_note,
                 standard_reference = excluded.standard_reference,
                 validation_status = 'VALIDATED',
+                grounding_status = excluded.grounding_status,
+                grounded_claims_json = excluded.grounded_claims_json,
+                citation_verification_json = excluded.citation_verification_json,
                 timestamp = CURRENT_TIMESTAMP
             """,
             (
@@ -192,6 +203,9 @@ def save_design_revision(
                 first["unit"],
                 source_note,
                 standard_reference,
+                grounding_status,
+                json.dumps(list(grounded_claims or []), sort_keys=True),
+                json.dumps(citation_verification or {}, sort_keys=True),
             ),
         )
         connection.execute(

@@ -126,6 +126,10 @@ class DatabaseTests(unittest.TestCase):
         migrated = fetch_table("procurement_records", db_path=legacy_path)[0]
         self.assertEqual(migrated["quote_status"], "PENDING_VERIFICATION")
         self.assertIsNotNone(migrated["created_at"])
+        revision = fetch_table("design_revisions", db_path=legacy_path)[0]
+        self.assertEqual(revision["grounding_status"], "UNVERIFIED_LEGACY")
+        self.assertEqual(revision["grounded_claims_json"], "[]")
+        self.assertEqual(revision["citation_verification_json"], "{}")
 
 
 if __name__ == "__main__":

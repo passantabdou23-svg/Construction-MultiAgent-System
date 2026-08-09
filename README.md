@@ -8,11 +8,12 @@ A private, local proof-of-concept that turns a controlled construction revision 
 
 1. Rejects irrelevant, ambiguous, contradictory, or incomplete notes before calling the LLM.
 2. Routes each question to the relevant controlled discipline and retrieves top-k passages using semantic + BM25-style lexical ranking from persistent local ChromaDB.
-3. Uses a local Ollama design agent to extract a validated revision and one or more material requirements.
-4. Uses a local procurement agent to produce clearly labelled **unverified estimates**.
-5. Recalculates arithmetic and delivery dates deterministically in Python.
-6. Maps the affected element to the correct task in the demonstration CPM network.
-7. Stores every completed, rejected, or failed run in SQLite for auditability.
+3. Uses a local Ollama design agent to extract a validated revision and claim-level technical guidance.
+4. Verifies that every technical claim cites a retrieved chunk and contains a verbatim supporting quote.
+5. Uses a local procurement agent to produce clearly labelled **unverified estimates**.
+6. Recalculates arithmetic and delivery dates deterministically in Python.
+7. Maps the affected element to the correct task in the demonstration CPM network.
+8. Stores every completed, rejected, or failed run in SQLite for auditability.
 
 ```mermaid
 flowchart LR
@@ -20,13 +21,15 @@ flowchart LR
     B -->|"Rejected"| C["Audit rejected run"]
     B -->|"Accepted"| D["Local ChromaDB retrieval"]
     D --> E["Ollama design agent"]
-    E --> F{"Pydantic design contract"}
-    F --> G["Normalized materials in SQLite"]
-    G --> H["Ollama procurement agent"]
-    H --> I{"Pydantic quote contract"}
-    I --> J["Trusted date and cost calculations"]
-    J --> K["NetworkX CPM impact"]
-    K --> L["Streamlit audit dashboard"]
+    E --> F{"Claim + citation contract"}
+    F --> G{"Deterministic grounding verification"}
+    G -->|"Refused"| C
+    G -->|"Verified"| H["Normalized materials in SQLite"]
+    H --> I["Ollama procurement agent"]
+    I --> J{"Pydantic quote contract"}
+    J --> K["Trusted date and cost calculations"]
+    K --> L["NetworkX CPM impact"]
+    L --> M["Streamlit audit dashboard"]
 ```
 
 ## Requirements
@@ -63,11 +66,12 @@ corpus contains official England Approved Documents A (structure), C (ground/moi
 K (falling/collision/impact), and 7 (materials/workmanship). `rag_data/` is generated
 locally and is intentionally not committed.
 
-Build the persistent vector index and run the labelled retrieval evaluation:
+Build the persistent vector index and run both labelled retrieval and grounding evaluations:
 
 ```powershell
 python index_documents.py
 python evaluate_rag.py
+python evaluate_grounding.py
 ```
 
 The first index build uses Chroma's local `all-MiniLM-L6-v2` ONNX embedding model
@@ -149,7 +153,9 @@ Copy `.env.example` to `.env`.
 | `ingest_documents.py` | Verified PDF extraction and citation-ready chunk generation |
 | `index_documents.py` | Idempotent local MiniLM embedding and persistent indexing |
 | `evaluate_rag.py` | Labelled Hit@k, MRR, acceptance, and rejection evaluation |
-| `design_agent.py` | Validated design extraction through Ollama |
+| `design_agent.py` | Evidence-only design extraction through Ollama |
+| `grounding.py` | Claim/chunk integrity, exact-quote alignment, numeric support, site-fact isolation, and version-conflict checks |
+| `evaluate_grounding.py` | Real-document acceptance and guard-rejection evaluation |
 | `procurement_agent.py` | Unverified procurement estimates with trusted local calculations |
 | `cpm_solver.py` | NetworkX schedule and critical-path calculations |
 | `agent_pipeline.py` | Orchestration and run-status audit trail |
@@ -167,6 +173,14 @@ Copy `.env.example` to `.env`.
   build reaches 100% Hit@5, Top-1 accuracy, MRR, routing accuracy, positive acceptance,
   and negative rejection on that set. Passing it
   demonstrates this controlled corpus and query set; it is not a general compliance benchmark.
+- Technical guidance output is accepted only when every claim cites a retrieved immutable
+  chunk, includes a verbatim source quote, passes lexical and numeric support checks, and
+  uses current governance-compatible document versions. A bounded correction attempt repairs
+  invalid model contracts; deterministic quote alignment can select an exact supporting sentence
+  from the model-selected chunk, but only when claim tokens and numbers remain supported. Site-note
+  verification separately prevents retrieved standards from creating procurement requirements.
+  The grounding guard evaluation covers all four documents plus seven rejection mutations; it does not replace expert
+  semantic review or prove that a language model can never produce a misleading claim.
 - The included Approved Documents A, C, K and 7 apply to England and are not Egyptian
   compliance authority. Consult the controlled official publication and a licensed engineer
   for engineering decisions.

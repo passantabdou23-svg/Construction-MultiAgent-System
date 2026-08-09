@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "description": "Grounded-generation guard checks using real passages from controlled Approved Documents A, C, K and 7.",
+  "targets": {
+    "minimum_supported_acceptance_rate": 1.0,
+    "minimum_guard_rejection_rate": 1.0
+  },
+  "cases": [
+    {
+      "id": "supported-a-foundations",
+      "kind": "supported",
+      "query": "minimum width of strip foundations",
+      "expected_document_code": "A",
+      "claim_text": "The recommended minimum foundation widths in Table 10 may be used.",
+      "evidence_quote": "The recommended minimum widths of foundations given in Table 10 may be used."
+    },
+    {
+      "id": "supported-c-subsoil-drainage",
+      "kind": "supported",
+      "query": "subsoil drainage requirements for contaminants",
+      "expected_document_code": "C",
+      "claim_text": "Where ground contaminants are present, subsoil drainage should be considered to limit transportation of water-borne contaminants.",
+      "evidence_quote": "Where contaminants are present in the ground, consideration should be given to subsoil drainage to prevent the transportation of water- borne contaminants to the foundations or into the building or its services."
+    },
+    {
+      "id": "supported-k-ramp-gradient",
+      "kind": "supported",
+      "query": "maximum ramp gradient",
+      "expected_document_code": "K",
+      "claim_text": "For ramp goings between 2m and 10m, gradients may be interpolated, including 1:14 for 4m or 1:19 for 9m.",
+      "evidence_quote": "For goings between 2m and 10m, it is acceptable to interpolate between the maximum gradients i.e. 1:14 for 4m going or 1:19 for 9m going"
+    },
+    {
+      "id": "supported-7-workmanship",
+      "kind": "supported",
+      "query": "requirements for workmanship",
+      "expected_document_code": "7",
+      "claim_text": "The person carrying out the work should show that workmanship provides the appropriate protection and performance.",
+      "evidence_quote": "The person carrying out the work should show that the workmanship will provide the appropriate level of protection and performance."
+    },
+    {
+      "id": "reject-unknown-chunk",
+      "kind": "guard_rejection",
+      "mutation": "unknown_chunk",
+      "base_case": "supported-a-foundations"
+    },
+    {
+      "id": "reject-altered-quote",
+      "kind": "guard_rejection",
+      "mutation": "altered_quote",
+      "base_case": "supported-c-subsoil-drainage"
+    },
+    {
+      "id": "reject-unsupported-number",
+      "kind": "guard_rejection",
+      "mutation": "unsupported_number",
+      "base_case": "supported-k-ramp-gradient"
+    },
+    {
+      "id": "reject-superseded-source",
+      "kind": "guard_rejection",
+      "mutation": "superseded_source",
+      "base_case": "supported-7-workmanship"
+    },
+    {
+      "id": "reject-conflicting-version",
+      "kind": "guard_rejection",
+      "mutation": "conflicting_version",
+      "base_case": "supported-a-foundations"
+    },
+    {
+      "id": "accept-safe-refusal",
+      "kind": "guard_rejection",
+      "mutation": "model_refusal",
+      "base_case": "supported-a-foundations"
+    },
+    {
+      "id": "reject-evidence-contaminated-design",
+      "kind": "guard_rejection",
+      "mutation": "evidence_contaminated_design",
+      "base_case": "supported-a-foundations"
+    }
+  ]
+}
