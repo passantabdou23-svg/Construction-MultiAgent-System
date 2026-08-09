@@ -108,12 +108,24 @@ class DatabaseTests(unittest.TestCase):
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(revision_id) REFERENCES design_revisions(revision_id)
             );
+            CREATE TABLE pipeline_runs (
+                run_id TEXT PRIMARY KEY,
+                site_note TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('RUNNING', 'COMPLETED', 'REJECTED', 'FAILED')),
+                revision_id TEXT,
+                error_message TEXT,
+                started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                completed_at DATETIME
+            );
             INSERT INTO design_revisions
                 (revision_id, affected_element, item_id, material_type, specification, quantity, unit)
             VALUES ('Rev-OLD', 'foundation', 'CONC-OLD', 'Concrete', 'C40', 5, 'm3');
             INSERT INTO procurement_records
                 (revision_id, item_id, supplier_name, unit_cost, total_cost, lead_time_days, earliest_delivery_date)
             VALUES ('Rev-OLD', 'CONC-OLD', 'Legacy supplier', 100, 500, 5, '2026-08-14');
+            INSERT INTO pipeline_runs
+                (run_id, site_note, status, revision_id, completed_at)
+            VALUES ('legacy-run', 'Legacy validated site note', 'COMPLETED', 'Rev-OLD', CURRENT_TIMESTAMP);
             """
         )
         connection.commit()
@@ -130,6 +142,10 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(revision["grounding_status"], "UNVERIFIED_LEGACY")
         self.assertEqual(revision["grounded_claims_json"], "[]")
         self.assertEqual(revision["citation_verification_json"], "{}")
+        legacy_run = fetch_table("pipeline_runs", db_path=legacy_path)[0]
+        self.assertEqual(legacy_run["run_id"], "legacy-run")
+        self.assertEqual(legacy_run["workflow_stage"], "TERMINAL")
+        self.assertEqual(fetch_table("approval_requests", db_path=legacy_path), [])
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # Construction Multi-Agent System
 
-A private, local proof-of-concept that turns a controlled construction revision note into a traceable design extraction, procurement planning estimate, and Critical Path Method (CPM) impact. The language-model agents run through Ollama; deterministic Python validation and Pydantic contracts prevent invalid notes and malformed model output from entering the audit database.
+A private, local proof-of-concept that turns a controlled construction revision note into a traceable design extraction, human review package, procurement planning estimate, and Critical Path Method (CPM) impact. The language-model agents run through Ollama; deterministic Python validation and Pydantic contracts prevent invalid notes and malformed model output from entering the audit database.
 
 > This application supports planning demonstrations. It does not replace a licensed engineer, a verified supplier quotation, an approved project programme, or access to the full licensed standards.
 
@@ -10,10 +10,12 @@ A private, local proof-of-concept that turns a controlled construction revision 
 2. Routes each question to the relevant controlled discipline and retrieves top-k passages using semantic + BM25-style lexical ranking from persistent local ChromaDB.
 3. Uses a local Ollama design agent to extract a validated revision and claim-level technical guidance.
 4. Verifies that every technical claim cites a retrieved chunk and contains a verbatim supporting quote.
-5. Uses a local procurement agent to produce clearly labelled **unverified estimates**.
-6. Recalculates arithmetic and delivery dates deterministically in Python.
-7. Maps the affected element to the correct task in the demonstration CPM network.
-8. Stores every completed, rejected, or failed run in SQLite for auditability.
+5. Creates an immutable SHA-256 review snapshot and waits for one recorded human decision.
+6. Blocks procurement and scheduling when the package is pending, rejected, changed, or replayed.
+7. After approval, uses a local procurement agent to produce clearly labelled **unverified estimates**.
+8. Recalculates arithmetic and delivery dates deterministically in Python.
+9. Maps the affected element to the correct task in the demonstration CPM network.
+10. Stores pending, approved, rejected, completed, and failed workflow events in SQLite.
 
 ```mermaid
 flowchart LR
@@ -24,12 +26,14 @@ flowchart LR
     E --> F{"Claim + citation contract"}
     F --> G{"Deterministic grounding verification"}
     G -->|"Refused"| C
-    G -->|"Verified"| H["Normalized materials in SQLite"]
-    H --> I["Ollama procurement agent"]
-    I --> J{"Pydantic quote contract"}
-    J --> K["Trusted date and cost calculations"]
-    K --> L["NetworkX CPM impact"]
-    L --> M["Streamlit audit dashboard"]
+    G -->|"Verified"| H["Immutable review snapshot"]
+    H --> I{"Recorded human decision"}
+    I -->|"Rejected"| C
+    I -->|"Approved"| J["Ollama procurement agent"]
+    J --> K{"Pydantic quote contract"}
+    K --> L["Trusted date and cost calculations"]
+    L --> M["NetworkX CPM impact"]
+    M --> N["Streamlit audit dashboard"]
 ```
 
 ## Requirements
@@ -114,6 +118,13 @@ Site update Rev-102: Need 150 m3 of C60 concrete for the column pour.
 
 The note must contain a revision ID, construction action, supported material, affected element, positive quantity, and unit.
 
+When a grounded package is created, it appears in **Human approval queue**. Inspect the
+site note, material requirements, verified claims, cited passages, and snapshot SHA-256;
+then enter the reviewer name and role and record **APPROVE** or **REJECT**. Procurement
+planning and CPM analysis run only after approval. A rejection is terminal, and the same
+review cannot be decided twice. Reviewer identity is audit metadata in this local version;
+it is not authenticated and must not be presented as an electronic signature.
+
 ## Run the automated tests
 
 The tests do not call a real language model; Ollama responses are mocked where necessary.
@@ -123,7 +134,7 @@ python -m unittest discover -s tests -v
 python -m unittest test_stress_cases -v
 ```
 
-The suite verifies input rejection, Pydantic contracts, multiple-material storage, foreign-key enforcement, trusted procurement arithmetic and dates, CPM calculations, persistent ChromaDB retrieval, controlled-PDF integrity, citation metadata, confidence rejection, compatibility safeguards, and audit logging.
+The suite verifies input rejection, Pydantic contracts, multiple-material storage, foreign-key enforcement, trusted procurement arithmetic and dates, CPM calculations, persistent ChromaDB retrieval, controlled-PDF integrity, citation metadata, confidence rejection, approval/rejection gating, snapshot tamper detection, replay prevention, compatibility safeguards, and audit logging.
 
 ## Configuration
 
@@ -156,6 +167,7 @@ Copy `.env.example` to `.env`.
 | `design_agent.py` | Evidence-only design extraction through Ollama |
 | `grounding.py` | Claim/chunk integrity, exact-quote alignment, numeric support, site-fact isolation, and version-conflict checks |
 | `evaluate_grounding.py` | Real-document acceptance and guard-rejection evaluation |
+| `approval.py` | Immutable review snapshots, SHA-256 integrity, stale-state checks, and replay prevention |
 | `procurement_agent.py` | Unverified procurement estimates with trusted local calculations |
 | `cpm_solver.py` | NetworkX schedule and critical-path calculations |
 | `agent_pipeline.py` | Orchestration and run-status audit trail |
@@ -165,6 +177,8 @@ Copy `.env.example` to `.env`.
 ## Data and trust boundaries
 
 - Procurement suppliers and prices are LLM planning estimates and are stored as `PENDING_VERIFICATION` / `LLM_ESTIMATE_UNVERIFIED`.
+- Procurement and schedule agents run only after a verified package receives one recorded approval. Rejection is terminal, and a changed or replayed package is blocked.
+- Reviewer name and role are self-declared audit fields in this local prototype. They are not authenticated identities, electronic signatures, or role-based authorization.
 - Delivery dates and total costs are recalculated in Python instead of being trusted from the model.
 - The live retriever uses controlled PDF chunks, local trained MiniLM embeddings,
   BM25-style lexical evidence, discipline routing, persistent ChromaDB storage, top-k
@@ -185,7 +199,7 @@ Copy `.env.example` to `.env`.
   compliance authority. Consult the controlled official publication and a licensed engineer
   for engineering decisions.
 - The CPM model is a five-task demonstration schedule, not a live Primavera P6 or Microsoft Project integration.
-- The workflow is sequentially orchestrated. The agents do not autonomously negotiate or approve construction decisions.
+- The workflow is sequentially orchestrated. The agents do not autonomously negotiate or approve construction decisions; the recorded human decision is an explicit gate.
 
 ## Deployment
 

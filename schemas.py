@@ -127,6 +127,60 @@ class RetrievedEvidence(BaseModel):
     source_url: str
 
 
+class ReviewDecisionInput(BaseModel):
+    """A self-identified human decision; authentication is outside this local prototype."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    reviewer_name: str = Field(min_length=2, max_length=120)
+    reviewer_role: Literal["Design engineer", "Project manager", "Authorized reviewer"]
+    decision: Literal["APPROVE", "REJECT"]
+    comment: str = Field(default="", max_length=2_000)
+
+    @model_validator(mode="after")
+    def rejection_requires_reason(self) -> "ReviewDecisionInput":
+        if self.decision == "REJECT" and len(self.comment) < 10:
+            raise ValueError("A rejection requires a comment of at least 10 characters")
+        return self
+
+
+class ApprovalReviewRecord(BaseModel):
+    review_id: str
+    run_id: str
+    revision_id: str
+    status: Literal["PENDING", "APPROVED", "REJECTED"]
+    payload_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reviewer_name: str | None = None
+    reviewer_role: str | None = None
+    review_comment: str | None = None
+    requested_at: str | None = None
+    decided_at: str | None = None
+
+
+class ApprovalPayload(BaseModel):
+    site_note: str = Field(min_length=10, max_length=4_000)
+    validation_message: str
+    retrieved_standard: str
+    retrieved_evidence: List[RetrievedEvidence] = Field(min_length=1)
+    grounded_claims: List[GroundedClaim] = Field(min_length=1)
+    grounding: GroundingVerification
+    design: DesignUpdatePayload
+
+
+class PendingApprovalResult(ApprovalPayload):
+    run_id: str
+    status: Literal["AWAITING_APPROVAL"]
+    review: ApprovalReviewRecord
+
+
+class RejectedApprovalResult(BaseModel):
+    run_id: str
+    status: Literal["REJECTED"]
+    validation_message: str
+    review: ApprovalReviewRecord
+    design: DesignUpdatePayload
+
+
 class ProcurementQuote(BaseModel):
     """An unverified planning estimate produced by the local LLM."""
 
@@ -172,6 +226,7 @@ class PipelineResult(BaseModel):
     run_id: str
     status: Literal["COMPLETED"]
     validation_message: str
+    review: ApprovalReviewRecord
     retrieved_standard: str
     retrieved_evidence: List[RetrievedEvidence] = Field(min_length=1)
     grounded_claims: List[GroundedClaim] = Field(min_length=1)
