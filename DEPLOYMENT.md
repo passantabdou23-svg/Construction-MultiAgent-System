@@ -16,9 +16,11 @@ Run the application on the same workstation as Ollama. This is the cleanest conf
 8. Run `python -m unittest discover -s tests -v`.
 9. Run `python check_db.py` and inspect the current audit-record counts.
 10. Start the dashboard with `python -m streamlit run app.py`.
-11. Test one verified revision, one insufficient-evidence refusal, and one irrelevant note before the audience arrives.
-12. For the verified revision, confirm the persisted material rows contain only facts explicitly stated in the site note; retrieved standards must never create extra procurement items.
-13. Explain that verified citations are guidance passages and procurement quotes remain estimates pending human verification.
+11. Test one approved revision, one reviewer rejection, one insufficient-evidence refusal, and one irrelevant note before the audience arrives.
+12. Before approval, confirm the run is at `workflow_stage = AWAITING_APPROVAL` and that procurement and schedule tables have no rows for that revision.
+13. For the approved revision, confirm the persisted material rows contain only facts explicitly stated in the site note; retrieved standards must never create extra procurement items.
+14. Confirm a second decision for the same review is rejected and a changed snapshot cannot be approved.
+15. Explain that reviewer names and roles are self-declared audit fields, verified citations are guidance passages, and procurement quotes remain estimates pending verification.
 
 ## Local-only launch
 
@@ -44,7 +46,7 @@ The current architecture depends on a local Ollama service and a local SQLite fi
 
 ## Production boundary
 
-Before production use, add authentication, role-based authorization, HTTPS, a managed database with backups, a controlled schedule import, verified supplier integrations, licensed standards content, human approvals, monitoring, and data-retention controls.
+Before production use, add authentication, role-based authorization with separation of duties, electronic-signature policy where required, HTTPS, a managed database with backups, a controlled schedule import, verified supplier integrations, licensed standards content, monitoring, and data-retention controls.
 
 The current application must therefore be presented as a validated local planning prototype, not as an autonomous construction approval system.
 

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import sqlite3
 import json
+import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Sequence
@@ -110,6 +110,24 @@ def init_db(db_path: str | Path = DB_NAME) -> None:
                 FOREIGN KEY(revision_id) REFERENCES design_revisions(revision_id)
                     ON UPDATE CASCADE ON DELETE SET NULL
             );
+
+            CREATE TABLE IF NOT EXISTS approval_requests (
+                review_id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL UNIQUE,
+                revision_id TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('PENDING', 'APPROVED', 'REJECTED')),
+                payload_json TEXT NOT NULL,
+                payload_sha256 TEXT NOT NULL,
+                reviewer_name TEXT,
+                reviewer_role TEXT,
+                review_comment TEXT,
+                requested_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                decided_at DATETIME,
+                FOREIGN KEY(run_id) REFERENCES pipeline_runs(run_id)
+                    ON UPDATE CASCADE ON DELETE CASCADE,
+                FOREIGN KEY(revision_id) REFERENCES design_revisions(revision_id)
+                    ON UPDATE CASCADE ON DELETE RESTRICT
+            );
             """
         )
 
@@ -141,6 +159,20 @@ def init_db(db_path: str | Path = DB_NAME) -> None:
             ("projected_completion_date", "TEXT"),
         ):
             _add_column_if_missing(connection, "schedule_logs", name, declaration)
+
+        _add_column_if_missing(
+            connection,
+            "pipeline_runs",
+            "workflow_stage",
+            "TEXT NOT NULL DEFAULT 'EXECUTING'",
+        )
+        connection.execute(
+            """
+            UPDATE pipeline_runs
+            SET workflow_stage = 'TERMINAL'
+            WHERE status IN ('COMPLETED', 'REJECTED', 'FAILED')
+            """
+        )
 
         # Preserve old single-material rows in the normalized child table.
         connection.execute(
@@ -344,9 +376,183 @@ def start_pipeline_run(
 ) -> None:
     with transaction(db_path) as connection:
         connection.execute(
-            "INSERT INTO pipeline_runs (run_id, site_note, status) VALUES (?, ?, 'RUNNING')",
+            """
+            INSERT INTO pipeline_runs (run_id, site_note, status, workflow_stage)
+            VALUES (?, ?, 'RUNNING', 'EXECUTING')
+            """,
             (run_id, site_note),
         )
+
+
+def create_approval_request(
+    review_id: str,
+    run_id: str,
+    revision_id: str,
+    payload_json: str,
+    payload_sha256: str,
+    *,
+    db_path: str | Path = DB_NAME,
+) -> None:
+    with transaction(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO approval_requests (
+                review_id, run_id, revision_id, status, payload_json, payload_sha256
+            ) VALUES (?, ?, ?, 'PENDING', ?, ?)
+            """,
+            (review_id, run_id, revision_id, payload_json, payload_sha256),
+        )
+        cursor = connection.execute(
+            """
+            UPDATE pipeline_runs
+            SET workflow_stage = 'AWAITING_APPROVAL', revision_id = ?, error_message = NULL,
+                completed_at = NULL
+            WHERE run_id = ? AND status = 'RUNNING' AND workflow_stage = 'EXECUTING'
+            """,
+            (revision_id, run_id),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError(f"Pipeline run {run_id} is not ready for approval")
+
+
+def get_approval_request(
+    review_id: str,
+    *,
+    db_path: str | Path = DB_NAME,
+) -> dict[str, Any] | None:
+    connection = connect_db(db_path)
+    try:
+        row = connection.execute(
+            """
+            SELECT ar.*, pr.site_note
+            FROM approval_requests AS ar
+            JOIN pipeline_runs AS pr USING (run_id)
+            WHERE ar.review_id = ?
+            """,
+            (review_id,),
+        ).fetchone()
+        return dict(row) if row is not None else None
+    finally:
+        connection.close()
+
+
+def list_pending_approval_requests(
+    *,
+    db_path: str | Path = DB_NAME,
+) -> list[dict[str, Any]]:
+    connection = connect_db(db_path)
+    try:
+        rows = connection.execute(
+            """
+            SELECT review_id, run_id, revision_id, status, payload_sha256, requested_at
+            FROM approval_requests
+            WHERE status = 'PENDING'
+            ORDER BY requested_at, review_id
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        connection.close()
+
+
+def record_approval_decision(
+    review_id: str,
+    *,
+    status: str,
+    reviewer_name: str,
+    reviewer_role: str,
+    review_comment: str,
+    expected_payload_sha256: str,
+    db_path: str | Path = DB_NAME,
+) -> None:
+    if status not in {"APPROVED", "REJECTED"}:
+        raise ValueError(f"Unsupported approval status: {status}")
+    with transaction(db_path) as connection:
+        state = connection.execute(
+            """
+            SELECT ar.status AS review_status, ar.payload_sha256,
+                   pr.status AS run_status, pr.workflow_stage
+            FROM approval_requests AS ar
+            JOIN pipeline_runs AS pr USING (run_id)
+            WHERE ar.review_id = ?
+            """,
+            (review_id,),
+        ).fetchone()
+        if (
+            state is None
+            or state["review_status"] != "PENDING"
+            or state["payload_sha256"] != expected_payload_sha256
+            or state["run_status"] != "RUNNING"
+            or state["workflow_stage"] != "AWAITING_APPROVAL"
+        ):
+            raise ValueError("Approval request is missing, already decided, or has changed")
+        cursor = connection.execute(
+            """
+            UPDATE approval_requests
+            SET status = ?, reviewer_name = ?, reviewer_role = ?, review_comment = ?,
+                decided_at = CURRENT_TIMESTAMP
+            WHERE review_id = ? AND status = 'PENDING' AND payload_sha256 = ?
+            """,
+            (
+                status,
+                reviewer_name,
+                reviewer_role,
+                review_comment,
+                review_id,
+                expected_payload_sha256,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("Approval request is missing, already decided, or has changed")
+        if status == "REJECTED":
+            run_cursor = connection.execute(
+                """
+                UPDATE pipeline_runs
+                SET status = 'REJECTED', workflow_stage = 'TERMINAL', error_message = ?,
+                    completed_at = CURRENT_TIMESTAMP
+                WHERE run_id = (
+                    SELECT run_id FROM approval_requests WHERE review_id = ?
+                ) AND status = 'RUNNING' AND workflow_stage = 'AWAITING_APPROVAL'
+                """,
+                (f"Rejected by reviewer: {review_comment}", review_id),
+            )
+            if run_cursor.rowcount != 1:
+                raise ValueError("The pipeline run is no longer awaiting this decision")
+
+
+def get_design_review_state(
+    revision_id: str,
+    *,
+    db_path: str | Path = DB_NAME,
+) -> dict[str, Any] | None:
+    connection = connect_db(db_path)
+    try:
+        revision = connection.execute(
+            "SELECT * FROM design_revisions WHERE revision_id = ?",
+            (revision_id,),
+        ).fetchone()
+        if revision is None:
+            return None
+        requirements = connection.execute(
+            """
+            SELECT item_id, material_type, specification, quantity, unit
+            FROM material_requirements
+            WHERE revision_id = ?
+            ORDER BY item_id
+            """,
+            (revision_id,),
+        ).fetchall()
+        return {
+            "design": {
+                "revision_id": revision["revision_id"],
+                "affected_element": revision["affected_element"],
+                "requirements": [dict(row) for row in requirements],
+            },
+            "grounded_claims": json.loads(revision["grounded_claims_json"] or "[]"),
+            "grounding": json.loads(revision["citation_verification_json"] or "{}"),
+        }
+    finally:
+        connection.close()
 
 
 def finish_pipeline_run(
@@ -361,7 +567,8 @@ def finish_pipeline_run(
         connection.execute(
             """
             UPDATE pipeline_runs
-            SET status = ?, revision_id = ?, error_message = ?, completed_at = CURRENT_TIMESTAMP
+            SET status = ?, workflow_stage = 'TERMINAL', revision_id = ?, error_message = ?,
+                completed_at = CURRENT_TIMESTAMP
             WHERE run_id = ?
             """,
             (status, revision_id, error_message, run_id),
@@ -374,6 +581,7 @@ TABLES = {
     "procurement_records",
     "schedule_logs",
     "pipeline_runs",
+    "approval_requests",
 }
 
 
@@ -398,6 +606,9 @@ def database_counts(db_path: str | Path = DB_NAME) -> dict[str, int]:
             "schedule_impacts": connection.execute("SELECT COUNT(*) FROM schedule_logs").fetchone()[0],
             "rejected_runs": connection.execute(
                 "SELECT COUNT(*) FROM pipeline_runs WHERE status IN ('REJECTED', 'FAILED')"
+            ).fetchone()[0],
+            "pending_approvals": connection.execute(
+                "SELECT COUNT(*) FROM approval_requests WHERE status = 'PENDING'"
             ).fetchone()[0],
         }
     finally:
