@@ -1,39 +1,30 @@
-import sqlite3
-import json
-from agent_pipeline import run_construction_agent_pipeline
+"""Deterministic stress tests for unsafe and ambiguous site-note inputs."""
 
-# Edge-case scenarios to test system resilience
-TEST_SCENARIOS = [
-    {
-        "name": "Scenario 1: Missing Units & Ambiguous Quantity",
-        "note": "Site update: Need some extra steel rebar for the top slab ASAP. Maybe 50 or 60 pieces?"
-    },
-    {
-        "name": "Scenario 2: Contradictory Material Specs",
-        "note": "Rev-999: Change foundation columns to C50/60 concrete. Wait, strike that, make it C80/90 high performance concrete instead."
-    },
-    {
-        "name": "Scenario 3: Non-Construction / Irrelevant Input",
-        "note": "Hey team, don't forget we have a pizza party in the site trailer this Friday at 12 PM!"
-    }
-]
+import unittest
 
-def run_stress_tests():
-    print("=" * 70)
-    print("🧪 RUNNING MULTI-AGENT STRESS TESTS & EDGE-CASE EVALUATION")
-    print("=" * 70)
+from validation import SiteNoteValidationError, validate_site_note
 
-    for idx, test in enumerate(TEST_SCENARIOS, 1):
-        print(f"\n----------------------------------------------------------------------")
-        print(f"▶️ RUNNING TEST {idx}: {test['name']}")
-        print(f"   Input Note: \"{test['note']}\"")
-        print(f"----------------------------------------------------------------------")
-        
-        try:
-            run_construction_agent_pipeline(test['note'])
-            print(f"\n✅ TEST {idx} EXECUTED WITHOUT CRASHING")
-        except Exception as e:
-            print(f"\n❌ TEST {idx} FAILED WITH ERROR: {e}")
+
+class StressInputValidationTests(unittest.TestCase):
+    def test_missing_units_and_ambiguous_quantity_is_rejected(self):
+        with self.assertRaises(SiteNoteValidationError):
+            validate_site_note(
+                "Site update Rev-201: Need some steel rebar for the top slab, maybe 50 or 60 pieces."
+            )
+
+    def test_contradictory_material_specification_is_rejected(self):
+        with self.assertRaises(SiteNoteValidationError):
+            validate_site_note(
+                "Rev-999: Change 25 m3 concrete for foundation columns to C50/60; "
+                "strike that and make it C80/90."
+            )
+
+    def test_irrelevant_social_message_is_rejected(self):
+        with self.assertRaises(SiteNoteValidationError):
+            validate_site_note(
+                "Hey team, do not forget the pizza party in the site trailer this Friday at noon."
+            )
+
 
 if __name__ == "__main__":
-    run_stress_tests()
+    unittest.main(verbosity=2)

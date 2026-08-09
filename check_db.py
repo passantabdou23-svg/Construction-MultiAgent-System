@@ -1,26 +1,19 @@
-import sqlite3
+"""Read-only command-line database health summary."""
 
-# Connect to your local database
-conn = sqlite3.connect("construction_mas.db")
-cursor = conn.cursor()
+from database import TABLES, database_counts, fetch_table, init_db
+from settings import settings
 
-# Get table names to make sure we hit the right one
-cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-tables = cursor.fetchall()
-print(f"Tables in database: {tables}")
 
-# Check records in design_revisions
-try:
-    cursor.execute("SELECT * FROM design_revisions")
-    rows = cursor.fetchall()
+def main() -> None:
+    init_db(settings.database_path)
+    print("Database counts:")
+    for label, count in database_counts(settings.database_path).items():
+        print(f"- {label}: {count}")
 
-    print("\n--- DESIGN REVISIONS RECORDS ---")
-    if not rows:
-        print("No records found in design_revisions!")
-    else:
-        for row in rows:
-            print(row)
-except sqlite3.OperationalError as e:
-    print(f"\nError reading table: {e}")
+    print("\nTables:")
+    for table_name in sorted(TABLES):
+        print(f"- {table_name}: {len(fetch_table(table_name, db_path=settings.database_path))} rows")
 
-conn.close()
+
+if __name__ == "__main__":
+    main()
