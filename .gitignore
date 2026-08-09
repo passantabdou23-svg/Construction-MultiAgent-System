@@ -1,4 +1,11 @@
 __pycache__/
-*.pyc
+*.py[cod]
+*.db
 .env
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
+.streamlit/secrets.toml
 .vscode/
+.idea/

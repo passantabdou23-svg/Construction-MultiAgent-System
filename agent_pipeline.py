@@ -1,88 +1,164 @@
-import datetime
-import json
-import sqlite3
-import ollama
+"""Orchestration for the validated local construction-agent workflow."""
 
-from schemas import MaterialType, MaterialRequirement, DesignUpdatePayload
-from test_agent import LocalLLMDesignAgent
-from procurement_agent import LocalLLMProcurementAgent
-from database import init_db, save_design_revision, save_procurement_record, save_schedule_log
+from __future__ import annotations
 
-# Import new RAG and CPM Solver engines
-from rag_engine import ConstructionRAG
+from datetime import date, timedelta
+from typing import Any, Callable
+from uuid import uuid4
+
 from cpm_solver import CPMSolver
+from database import (
+    DB_NAME,
+    finish_pipeline_run,
+    init_db,
+    save_schedule_log,
+    start_pipeline_run,
+)
+from design_agent import LocalLLMDesignAgent
+from procurement_agent import LocalLLMProcurementAgent
+from rag_engine import ConstructionRAG
+from schemas import DesignUpdatePayload, PipelineResult, ProcurementResult, ScheduleImpact
+from validation import SiteNoteValidationError, validate_site_note
+
+
+ELEMENT_TASK_RULES = (
+    (("excavation", "site prep", "site preparation", "groundwork"), "TASK-SITE-PREP"),
+    (("foundation", "footing", "pile", "raft"), "TASK-FOUNDATION"),
+    (("column", "columns", "vertical structure"), "TASK-COLUMNS"),
+    (("slab", "beam", "floor", "deck", "reinforcement"), "TASK-SLAB"),
+    (("finish", "finishing", "inspection", "paint", "cladding"), "TASK-FINISHING"),
+)
+
+
+def map_element_to_task(affected_element: str) -> str:
+    normalized = affected_element.casefold()
+    for terms, task_id in ELEMENT_TASK_RULES:
+        if any(term in normalized for term in terms):
+            return task_id
+    raise ValueError(
+        f"Cannot map affected element '{affected_element}' to the demonstration CPM schedule"
+    )
+
 
 class LocalLLMSchedulerAgent:
-    def __init__(self):
-        self.cpm_engine = CPMSolver()
+    def __init__(
+        self,
+        *,
+        db_path: str = DB_NAME,
+        cpm_engine: CPMSolver | None = None,
+        today_provider: Callable[[], date] = date.today,
+    ):
+        self.db_path = db_path
+        self.cpm_engine = cpm_engine or CPMSolver()
+        self.today_provider = today_provider
 
-    def execute(self, revision_id: str, procurement_data: dict = None) -> dict:
-        print(f"\n⏱️ [3. SCHEDULE AGENT + NetworkX CPM Engine]: Evaluating Critical Path impact for {revision_id}...")
-        
-        lead_time = 0
-        if isinstance(procurement_data, dict):
-            lead_time = procurement_data.get("lead_time_days", 5)
+    def execute(
+        self,
+        revision_id: str,
+        affected_element: str,
+        procurement_data: dict[str, Any],
+    ) -> dict:
+        procurement = ProcurementResult.model_validate(procurement_data)
+        affected_task = map_element_to_task(affected_element)
+        cpm_result = self.cpm_engine.calculate_cpm_impact(
+            affected_task,
+            lead_time_delay=procurement.maximum_lead_time_days,
+        )
+        completion_date = self.today_provider() + timedelta(
+            days=cpm_result["total_project_duration_days"]
+        )
+        action = (
+            f"Review the unverified {procurement.maximum_lead_time_days}-day procurement lead time "
+            f"for {affected_task}. The calculated critical path is "
+            f"{' -> '.join(cpm_result['critical_path_tasks'])}; obtain engineer and procurement "
+            "approval before changing the baseline programme."
+        )
+        report = ScheduleImpact(
+            revision_id=revision_id,
+            affected_task=affected_task,
+            task_id=f"IMPACT-{revision_id}-{affected_task.removeprefix('TASK-')}",
+            is_critical_path=cpm_result["is_critical"],
+            delay_days=cpm_result["delay_added"],
+            baseline_duration_days=cpm_result["baseline_project_duration_days"],
+            projected_duration_days=cpm_result["total_project_duration_days"],
+            projected_completion_date=completion_date,
+            recommended_action=action,
+        )
+        serialized = report.model_dump(mode="json")
+        save_schedule_log(revision_id, serialized, db_path=self.db_path)
+        return serialized
 
-        # Run Graph-based CPM Solver
-        cpm_results = self.cpm_engine.calculate_cpm_impact("TASK-FOUNDATION", lead_time_delay=lead_time)
 
-        schedule_report = {
-            "task_id": f"TASK-{revision_id}",
-            "is_critical_path": cpm_results["is_critical"],
-            "delay_days": cpm_results["delay_added"],
-            "new_start_date": "2026-08-15",
-            "recommended_action": f"NetworkX DAG Analysis: Critical Path ({' -> '.join(cpm_results['critical_path_tasks'])}). Total baseline duration updated to {cpm_results['total_project_duration_days']} days."
-        }
-        
-        try:
-            save_schedule_log(revision_id, schedule_report)
-            print(f"   -> Saved Schedule Log for Task {schedule_report['task_id']} to Database")
-        except Exception as e:
-            print(f"   -> Logged schedule evaluation internally: {e}")
-            
-        return schedule_report
-
-def run_construction_agent_pipeline(site_note: str = None):
-    print("\n" + "=" * 60)
-    print("🚀 STARTING LOCAL MULTI-AGENT CONSTRUCTION WORKFLOW (RAG + CPM ENHANCED)")
-    print("=" * 60)
+def run_construction_agent_pipeline(
+    site_note: str | None = None,
+    *,
+    db_path: str = DB_NAME,
+    rag: ConstructionRAG | None = None,
+    design_agent: LocalLLMDesignAgent | None = None,
+    procurement_agent: LocalLLMProcurementAgent | None = None,
+    scheduler_agent: LocalLLMSchedulerAgent | None = None,
+) -> dict:
+    """Validate, execute, persist, and return a traceable pipeline result."""
+    init_db(db_path)
+    run_id = str(uuid4())
+    raw_note = (site_note or "").strip()
+    start_pipeline_run(run_id, raw_note or "<empty>", db_path=db_path)
+    revision_id: str | None = None
 
     try:
-        init_db()
-    except Exception:
-        pass
+        validated_note = validate_site_note(raw_note)
+        rag_engine = rag or ConstructionRAG()
+        standard = rag_engine.query(validated_note.text)
 
-    if not site_note:
-        site_note = "Site inspection on Rev-905: Required 200 m3 of C40/50 Ready-Mix Concrete for ground slab."
+        design_executor = design_agent or LocalLLMDesignAgent(db_path=db_path)
+        design_data = design_executor.execute(
+            validated_note.text,
+            standard_context=standard.citation,
+            expected_revision_id=validated_note.revision_id,
+        )
+        design = DesignUpdatePayload.model_validate(design_data)
+        revision_id = design.revision_id
 
-    # 1. Vector RAG Query
-    rag = ConstructionRAG()
-    retrieved_code = rag.query_spec(site_note)
-    print(f"\n📚 [RAG VECTOR ENGINE]: Retrieved Code Constraint -> '{retrieved_code}'")
+        procurement_executor = procurement_agent or LocalLLMProcurementAgent(db_path=db_path)
+        procurement_data = procurement_executor.execute(design.revision_id)
 
-    # 2. Design Agent Execution (Context-Augmented)
-    augmented_site_note = f"{site_note} [Building Standard Constraint: {retrieved_code}]"
-    design_agent = LocalLLMDesignAgent()
-    parsed_design = design_agent.execute(augmented_site_note)
-    
-    revision_id = "Rev-GENERIC"
-    if isinstance(parsed_design, dict):
-        revision_id = parsed_design.get("revision_id", "Rev-802")
-    elif isinstance(parsed_design, list) and len(parsed_design) > 0:
-        if isinstance(parsed_design[0], dict):
-            revision_id = parsed_design[0].get("revision_id", "Rev-802")
+        scheduler_executor = scheduler_agent or LocalLLMSchedulerAgent(db_path=db_path)
+        schedule_data = scheduler_executor.execute(
+            design.revision_id,
+            design.affected_element,
+            procurement_data,
+        )
 
-    # 3. Procurement Agent Execution
-    procurement_agent = LocalLLMProcurementAgent()
-    procurement_result = procurement_agent.execute(revision_id)
+        result = PipelineResult(
+            run_id=run_id,
+            status="COMPLETED",
+            validation_message="Input and all agent outputs passed deterministic schema checks.",
+            retrieved_standard=standard.citation,
+            design=design,
+            procurement=ProcurementResult.model_validate(procurement_data),
+            schedule=ScheduleImpact.model_validate(schedule_data),
+        )
+        finish_pipeline_run(
+            run_id,
+            "COMPLETED",
+            revision_id=design.revision_id,
+            db_path=db_path,
+        )
+        return result.model_dump(mode="json")
+    except SiteNoteValidationError as error:
+        finish_pipeline_run(run_id, "REJECTED", error_message=str(error), db_path=db_path)
+        raise
+    except Exception as error:
+        finish_pipeline_run(
+            run_id,
+            "FAILED",
+            revision_id=revision_id,
+            error_message=str(error),
+            db_path=db_path,
+        )
+        raise
 
-    # 4. Scheduler Agent Execution (NetworkX Solver)
-    scheduler_agent = LocalLLMSchedulerAgent()
-    schedule_result = scheduler_agent.execute(revision_id, procurement_result)
-
-    print("\n" + "=" * 60)
-    print("✅ MULTI-AGENT WORKFLOW COMPLETED & PERSISTED TO DATABASE")
-    print("=" * 60)
 
 if __name__ == "__main__":
-    run_construction_agent_pipeline()
+    example = "Site update Rev-905: Need 200 m3 of C40 concrete for the ground slab."
+    print(run_construction_agent_pipeline(example))

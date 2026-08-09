@@ -1,115 +1,100 @@
-import sqlite3
-import json
-import ollama
+"""Validated local-LLM procurement planning agent."""
 
-DB_NAME = "construction_mas.db"
+from __future__ import annotations
+
+from datetime import date, timedelta
+from typing import Any, Callable
+
+import ollama
+from pydantic import ValidationError
+
+from database import DB_NAME, get_material_requirements, save_procurement_records
+from schemas import ProcurementQuote, ProcurementResult
+from settings import settings
+
+
+class ProcurementAgentError(RuntimeError):
+    pass
+
+
+def _response_content(response: Any) -> str:
+    if isinstance(response, dict):
+        return response["message"]["content"]
+    return response.message.content
+
 
 class LocalLLMProcurementAgent:
-    def execute(self, revision_id: str) -> dict:
-        print(f"\n📦 [2. PROCUREMENT AGENT - LOCAL LLM]: Evaluating order for revision {revision_id}...")
+    def __init__(
+        self,
+        *,
+        model: str | None = None,
+        db_path: str = DB_NAME,
+        client: Any = ollama,
+        today_provider: Callable[[], date] = date.today,
+    ):
+        self.model = model or settings.ollama_model
+        self.db_path = db_path
+        self.client = client
+        self.today_provider = today_provider
 
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            SELECT item_id, material_type, specification, quantity, unit, affected_element 
-            FROM design_revisions 
-            WHERE revision_id = ?
-        """, (revision_id,))
-        
-        rows = cursor.fetchall()
-        conn.close()
-
-        if not rows:
-            print("   -> No materials found for this revision. Skipping procurement.")
-            return {
-                "revision_id": revision_id,
-                "status": "SKIPPED",
-                "reason": "No actionable materials identified"
-            }
-
-        item_id, material_type, specification, quantity, unit, affected_element = rows[0]
-
-        prompt = f"""
-        You are a Construction Procurement Agent. 
-        Evaluate supplier lead times and costs for the following item:
-        - Revision: {revision_id}
-        - Material Type: {material_type}
-        - Specification: {specification}
-        - Quantity: {quantity} {unit}
-        - Element: {affected_element}
-
-        Return ONLY a JSON object:
-        {{
-            "supplier_name": "string",
-            "unit_cost": float,
-            "total_cost": float,
-            "lead_time_days": int,
-            "earliest_delivery_date": "YYYY-MM-DD"
-        }}
-        """
-
+    def _quote_material(self, revision_id: str, material: dict[str, Any]) -> ProcurementQuote:
+        today = self.today_provider()
+        prompt = (
+            "You are a construction procurement planning agent. Produce an UNVERIFIED planning "
+            "estimate, not a real supplier quotation. Return JSON matching the supplied schema.\n"
+            f"Current date: {today.isoformat()}\n"
+            f"Revision: {revision_id}\n"
+            f"Item ID: {material['item_id']}\n"
+            f"Material: {material['material_type']}\n"
+            f"Specification: {material['specification']}\n"
+            f"Quantity: {material['quantity']} {material['unit']}\n"
+            f"Affected element: {material['affected_element']}\n"
+            "unit_cost must be positive and lead_time_days must be between 0 and 365."
+        )
         try:
-            response = ollama.chat(
-                model="llama3.1",
-                messages=[{"role": "user", "content": prompt}]
+            response = self.client.chat(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                format=ProcurementQuote.model_json_schema(),
             )
-            raw_content = response['message']['content'].strip()
-            
-            if "```json" in raw_content:
-                raw_content = raw_content.split("```json")[1].split("```")[0].strip()
-            elif "```" in raw_content:
-                raw_content = raw_content.split("```")[1].split("```")[0].strip()
-                
-            parsed_json = json.loads(raw_content)
-            
-            # If the LLM returns a list, take the first element
-            if isinstance(parsed_json, list) and len(parsed_json) > 0:
-                procurement_info = parsed_json[0]
-            elif isinstance(parsed_json, dict):
-                procurement_info = parsed_json
-            else:
-                raise ValueError("Unexpected JSON format from LLM")
+            quote = ProcurementQuote.model_validate_json(_response_content(response))
+        except (KeyError, TypeError, ValueError, ValidationError) as error:
+            raise ProcurementAgentError(
+                f"Procurement output for {material['item_id']} failed validation: {error}"
+            ) from error
+        except Exception as error:
+            raise ProcurementAgentError(
+                f"Procurement agent could not estimate {material['item_id']}: {error}"
+            ) from error
 
-        except Exception as e:
-            print(f"   -> LLM parsing note: Using fallback calculations ({e})")
-            procurement_info = {
-                "supplier_name": "Apex Readymix Co.",
-                "unit_cost": 120.0,
-                "total_cost": (quantity or 1.0) * 120.0,
-                "lead_time_days": 7,
-                "earliest_delivery_date": "2026-08-12"
+        # Trusted arithmetic and dates are derived locally, not accepted from the LLM.
+        unit_cost = round(float(quote.unit_cost), 2)
+        total_cost = round(unit_cost * float(material["quantity"]), 2)
+        delivery_date = today + timedelta(days=quote.lead_time_days)
+        return quote.model_copy(
+            update={
+                "item_id": material["item_id"],
+                "unit_cost": unit_cost,
+                "total_cost": total_cost,
+                "earliest_delivery_date": delivery_date,
+                "quote_status": "PENDING_VERIFICATION",
+                "source": "LLM_ESTIMATE_UNVERIFIED",
             }
+        )
 
-        # Ensure dictionary safety
-        if not isinstance(procurement_info, dict):
-            procurement_info = {
-                "supplier_name": "Apex Readymix Co.",
-                "unit_cost": 120.0,
-                "total_cost": 500.0,
-                "lead_time_days": 5,
-                "earliest_delivery_date": "2026-08-12"
-            }
+    def execute(self, revision_id: str) -> dict:
+        materials = get_material_requirements(revision_id, db_path=self.db_path)
+        if not materials:
+            raise ProcurementAgentError(f"No validated materials exist for revision {revision_id}")
 
-        # Save Procurement details into database
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO procurement_records 
-            (revision_id, item_id, supplier_name, unit_cost, total_cost, lead_time_days, earliest_delivery_date)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            revision_id,
-            item_id or "MAT-GENERIC",
-            procurement_info.get("supplier_name", "Apex Readymix Co."),
-            procurement_info.get("unit_cost", 100.0),
-            procurement_info.get("total_cost", 500.0),
-            procurement_info.get("lead_time_days", 5),
-            procurement_info.get("earliest_delivery_date", "2026-08-12")
-        ))
-        conn.commit()
-        conn.close()
+        quotes = [self._quote_material(revision_id, material) for material in materials]
+        serialized_quotes = [quote.model_dump(mode="json") for quote in quotes]
+        save_procurement_records(revision_id, serialized_quotes, db_path=self.db_path)
 
-        print(f"   -> Supplier: {procurement_info.get('supplier_name')}")
-        print(f"   -> Estimated Lead Time: {procurement_info.get('lead_time_days')} days")
-        return procurement_info
+        result = ProcurementResult(
+            revision_id=revision_id,
+            status="PENDING_VERIFICATION",
+            quotes=quotes,
+            maximum_lead_time_days=max(quote.lead_time_days for quote in quotes),
+        )
+        return result.model_dump(mode="json")

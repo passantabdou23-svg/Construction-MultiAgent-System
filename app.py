@@ -1,101 +1,162 @@
-import streamlit as st
-import sqlite3
+"""Professional Streamlit dashboard for the local construction-agent workflow."""
+
+from __future__ import annotations
+
 import pandas as pd
+import streamlit as st
+
 from agent_pipeline import run_construction_agent_pipeline
+from database import TABLES, database_counts, fetch_table, init_db
+from settings import settings
+from validation import SiteNoteValidationError
 
-DB_NAME = "construction_mas.db"
 
-# Page Configuration
 st.set_page_config(
-    page_title="Private Construction MAS Dashboard",
-    page_icon="🏗️",
-    layout="wide"
+    page_title="Construction MAS control centre",
+    page_icon=":material/construction:",
+    layout="wide",
 )
 
-# Title & Header
-st.title("🏗️ Multi-Agent Construction Project System")
-st.caption("100% Private, Local LLM-Driven Decision Engine (Ollama / Llama 3.1 + SQLite)")
+init_db(settings.database_path)
+st.session_state.setdefault("last_pipeline_result", None)
 
-st.divider()
 
-# Left Column: Input Panel | Right Column: Quick Stats
-col_input, col_stats = st.columns([2, 1])
+def load_table(table_name: str) -> pd.DataFrame:
+    if table_name not in TABLES:
+        raise ValueError(f"Unsupported table: {table_name}")
+    return pd.DataFrame(fetch_table(table_name, db_path=settings.database_path))
 
-with col_input:
-    st.subheader("📝 Live Site Input")
-    site_note_input = st.text_area(
-        "Enter unstructured site note, inspection record, or revision request:",
-        height=120,
-        placeholder="e.g., Site update Rev-102: Need 150 m3 of C60 concrete for column pour by next Tuesday."
-    )
-    
-    run_button = st.button("🚀 Process via Agent Pipeline", type="primary")
 
-with col_stats:
-    st.subheader("📊 System Database Stats")
-    try:
-        conn = sqlite3.connect(DB_NAME)
-        rev_count = conn.execute("SELECT COUNT(*) FROM design_revisions").fetchone()[0]
-        proc_count = conn.execute("SELECT COUNT(*) FROM procurement_records").fetchone()[0]
-        sched_count = conn.execute("SELECT COUNT(*) FROM schedule_logs").fetchone()[0]
-        conn.close()
-        
-        st.metric("Design Revisions Logged", rev_count)
-        st.metric("Procurement Records", proc_count)
-        st.metric("Schedule Impact Logs", sched_count)
-    except Exception:
-        st.info("Database initializing upon first execution.")
+st.title("Construction multi-agent control centre")
+st.caption(
+    "Local Ollama workflow with deterministic validation, vector retrieval, "
+    "procurement planning, CPM impact analysis, and SQLite audit lineage."
+)
 
-st.divider()
+with st.sidebar:
+    st.subheader("System configuration")
+    st.badge("Local processing", icon=":material/lock:", color="green")
+    st.write(f"**Model:** `{settings.ollama_model}`")
+    st.write(f"**Database:** `{settings.database_path}`")
+    st.caption("Configuration can be changed through CONSTRUCTION_* environment variables.")
+    with st.expander("Decision boundaries", icon=":material/policy:"):
+        st.markdown(
+            "- Supplier and cost outputs are planning estimates requiring human verification.\n"
+            "- Retrieved standards are demonstration summaries, not compliance certificates.\n"
+            "- CPM uses the project demonstration schedule, not a live Primavera/MS Project file."
+        )
 
-# Pipeline Execution Trigger
-if run_button:
-    if not site_note_input.strip():
-        st.warning("⚠️ Please enter a site note before running the pipeline.")
+
+counts = database_counts(settings.database_path)
+with st.container(horizontal=True):
+    st.metric("Design revisions", counts["revisions"], border=True)
+    st.metric("Material requirements", counts["materials"], border=True)
+    st.metric("Unverified quotes", counts["quotes"], border=True)
+    st.metric("Schedule impacts", counts["schedule_impacts"], border=True)
+    st.metric("Rejected or failed", counts["rejected_runs"], border=True)
+
+
+left, right = st.columns([1.35, 1], gap="large")
+
+with left:
+    st.subheader("Process a controlled site revision")
+    with st.form("site_revision_form", border=True):
+        site_note = st.text_area(
+            "Construction site note",
+            height=155,
+            placeholder=(
+                "Site update Rev-102: Need 150 m3 of C60 concrete for the column pour."
+            ),
+            help=(
+                "Include a Rev-ID, construction action, material, affected element, "
+                "positive quantity, and unit. Ambiguous notes are rejected."
+            ),
+        )
+        submitted = st.form_submit_button(
+            "Run validated pipeline",
+            type="primary",
+            icon=":material/play_arrow:",
+        )
+
+    if submitted:
+        try:
+            with st.status(
+                "Validating and coordinating local agents…",
+                expanded=True,
+            ) as workflow_status:
+                st.write("Checking the note before contacting the model")
+                result = run_construction_agent_pipeline(
+                    site_note,
+                    db_path=settings.database_path,
+                )
+                st.write("Design, procurement, and schedule outputs passed their contracts")
+                workflow_status.update(
+                    label="Workflow completed and recorded",
+                    state="complete",
+                    expanded=False,
+                )
+            st.session_state.last_pipeline_result = result
+            st.success(
+                "The run completed. Procurement values remain pending human verification.",
+                icon=":material/check_circle:",
+            )
+        except SiteNoteValidationError as error:
+            st.error("The request was rejected before the LLM was called.", icon=":material/block:")
+            for issue in error.issues:
+                st.write(f"- {issue}")
+        except Exception as error:
+            st.error(f"The workflow stopped safely: {error}", icon=":material/error:")
+
+with right:
+    st.subheader("Latest decision")
+    latest = st.session_state.last_pipeline_result
+    if latest:
+        schedule = latest["schedule"]
+        procurement = latest["procurement"]
+        with st.container(border=True):
+            st.badge("Completed", icon=":material/check:", color="green")
+            st.write(f"**Revision:** {latest['design']['revision_id']}")
+            st.write(f"**Affected element:** {latest['design']['affected_element']}")
+            st.write(f"**Mapped CPM task:** {schedule['affected_task']}")
+            st.write(f"**Calculated delay:** {schedule['delay_days']} days")
+            st.write(f"**Projected completion:** {schedule['projected_completion_date']}")
+            st.write(f"**Quotes awaiting verification:** {len(procurement['quotes'])}")
+        with st.expander("Inspect complete validated result", icon=":material/data_object:"):
+            st.json(latest)
     else:
-        with st.spinner("🤖 Local Agents collaborating... (Design ➔ Procurement ➔ Schedule)"):
-            try:
-                run_construction_agent_pipeline(site_note_input)
-                st.success("✅ Multi-Agent Workflow Completed & Logged to Database!")
-                st.rerun()  # Instantly refresh table counts and UI
-            except Exception as e:
-                st.error(f"❌ Pipeline Execution Failed: {e}")
+        with st.container(border=True):
+            st.info(
+                "Run a valid revision to display its traceable decision summary here.",
+                icon=":material/info:",
+            )
 
-# Database Audit Section
-st.header("🔍 Database Audit & Agent State Lineage")
 
-tab1, tab2, tab3 = st.tabs(["🏗️ Design Revisions", "📦 Procurement Log", "⏱️ Critical Path Schedule Log"])
+st.header("Audit trail")
+st.caption("Every table is read-only in this dashboard. Runtime records remain in local SQLite.")
 
-def load_table(table_name):
-    try:
-        conn = sqlite3.connect(DB_NAME)
-        # Querying full table directly
-        df = pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
-        conn.close()
-        return df
-    except Exception as e:
-        return pd.DataFrame()
+tabs = st.tabs(
+    [
+        ":material/design_services: Revisions",
+        ":material/inventory_2: Materials",
+        ":material/request_quote: Procurement",
+        ":material/account_tree: Schedule",
+        ":material/history: Pipeline runs",
+    ]
+)
 
-with tab1:
-    st.subheader("Design Agent Output")
-    df_design = load_table("design_revisions")
-    if not df_design.empty:
-        st.dataframe(df_design)
-    else:
-        st.info("No design records found in database.")
+table_views = (
+    (tabs[0], "design_revisions", "Validated design revisions"),
+    (tabs[1], "material_requirements", "Normalized material requirements"),
+    (tabs[2], "procurement_records", "Unverified procurement planning estimates"),
+    (tabs[3], "schedule_logs", "Calculated CPM impacts"),
+    (tabs[4], "pipeline_runs", "Execution and rejection history"),
+)
 
-with tab2:
-    st.subheader("Procurement Agent Output")
-    df_proc = load_table("procurement_records")
-    if not df_proc.empty:
-        st.dataframe(df_proc)
-    else:
-        st.info("No procurement records found in database.")
-
-with tab3:
-    st.subheader("Scheduler Agent Output")
-    df_sched = load_table("schedule_logs")
-    if not df_sched.empty:
-        st.dataframe(df_sched)
-    else:
-        st.info("No schedule impact logs found in database.")
+for tab, table_name, title in table_views:
+    with tab:
+        st.subheader(title)
+        frame = load_table(table_name)
+        if frame.empty:
+            st.info("No records are available yet.")
+        else:
+            st.dataframe(frame, hide_index=True, width="stretch", key=f"audit-{table_name}")
