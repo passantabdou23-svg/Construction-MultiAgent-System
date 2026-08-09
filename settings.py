@@ -20,6 +20,8 @@ class AppSettings(BaseSettings):
     rag_index_path: str = "rag_data/chroma"
     rag_top_k: int = Field(default=3, ge=1, le=20)
     rag_minimum_similarity: float = Field(default=0.45, ge=0, le=1)
+    rag_semantic_weight: float = Field(default=0.75, ge=0, le=1)
+    rag_lexical_weight: float = Field(default=0.25, ge=0, le=1)
     maximum_site_note_characters: int = Field(default=4_000, ge=100, le=20_000)
 
 

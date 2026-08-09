@@ -9,9 +9,9 @@ Run the application on the same workstation as Ollama. This is the cleanest conf
 1. Open PowerShell in the repository.
 2. Activate the Python 3.12 virtual environment.
 3. Confirm `ollama list` contains the configured model.
-4. Run `python ingest_documents.py` to verify the controlled PDF and regenerate chunks.
-5. Run `python index_documents.py` and confirm 128 retrieval-eligible chunks are persistent.
-6. Run `python evaluate_rag.py` and confirm all configured retrieval targets pass.
+4. Run `python ingest_documents.py` and confirm 4 checksummed PDFs produce 586 auditable chunks.
+5. Run `python index_documents.py` and confirm 526 retrieval-eligible chunks are persistent.
+6. Run `python evaluate_rag.py --top-k 5` and confirm Hit@5, Top-1, routing, positive acceptance, and negative rejection targets pass.
 7. Run `python -m unittest discover -s tests -v`.
 8. Run `python check_db.py` and inspect the current audit-record counts.
 9. Start the dashboard with `python -m streamlit run app.py`.
@@ -52,3 +52,11 @@ managed server with authentication, backups, monitoring, controlled document-ver
 migrations, and a revalidated retrieval threshold. Never copy a live index between embedding
 models: the application rejects a stored collection whose model contract differs from the
 configured one.
+
+## Controlled RAG release checks
+
+- The corpus is limited to official England Approved Documents A, C, K and 7.
+- Every startup corpus refresh must verify the manifest checksum, PDF page count, searchable-page count, edition, status, source-check date, jurisdiction, and official URL.
+- Rebuild the index whenever a PDF or manifest record changes; do not mix vectors produced by different embedding-model contracts.
+- Re-run the labelled evaluation after changing documents, chunking, routing keywords, semantic/lexical weights, or the confidence floor.
+- Treat unresolved conflicts, superseded editions, out-of-jurisdiction questions, and low-confidence results as human-review conditions rather than compliance answers.

@@ -52,14 +52,31 @@ class KeywordEmbeddingFunction(EmbeddingFunction[Documents]):
         return [Space.COSINE]
 
 
-def _record(chunk_id: str, text: str, section: str, page: int) -> dict:
-    title = "Approved Document A: Structure"
-    edition = "2013 edition incorporating 2024 amendments"
+def _record(
+    chunk_id: str,
+    text: str,
+    section: str,
+    page: int,
+    *,
+    code: str = "A",
+    document_id: str = "approved-document-a",
+    discipline: str = "structure",
+    routing_keywords: str = "foundation | wall | roof | collapse",
+) -> dict:
+    title = f"Approved Document {code}"
+    edition = "controlled test edition"
     citation = f"{title} ({edition}), {section}, printed p. {page - 2} (PDF p. {page})"
     return {
         "chunk_id": chunk_id,
         "text": text,
-        "document_id": "approved-document-a",
+        "document_id": document_id,
+        "document_code": code,
+        "discipline": discipline,
+        "authority": "Test authority",
+        "status": "current",
+        "source_checked_date": "2026-08-09",
+        "effective_date": "",
+        "routing_keywords": routing_keywords,
         "title": title,
         "edition": edition,
         "publication_date": "2024-03-01",
@@ -89,6 +106,16 @@ class ConstructionRAGTests(unittest.TestCase):
                 "Strip foundation width must safely distribute wall loads to the ground.",
                 "Foundations",
                 38,
+            ),
+            _record(
+                "ramp-1",
+                "A ramp flight should satisfy the controlled gradient and going requirements.",
+                "Ramps",
+                25,
+                code="K",
+                document_id="approved-document-k",
+                discipline="falling-collision-impact",
+                routing_keywords="ramp | stair | guarding | handrail",
             ),
             _record(
                 "roof-1",
@@ -137,8 +164,8 @@ class ConstructionRAGTests(unittest.TestCase):
         summary = self.rag.index_chunks()
         results = self.rag.query_many("foundation wall", n_results=2)
 
-        self.assertEqual(summary.indexed_chunks, 3)
-        self.assertEqual(summary.eligible_chunks, 3)
+        self.assertEqual(summary.indexed_chunks, 4)
+        self.assertEqual(summary.eligible_chunks, 4)
         self.assertEqual(results[0].chunk_id, "foundation-1")
         self.assertEqual(results[0].printed_page_label, "36")
         self.assertIn("printed p. 36 (PDF p. 38)", results[0].citation)
@@ -152,7 +179,7 @@ class ConstructionRAGTests(unittest.TestCase):
 
         reopened = self._new_rag()
         self.rag = reopened
-        self.assertEqual(reopened.collection.count(), 3)
+        self.assertEqual(reopened.collection.count(), 4)
         self.assertEqual(reopened.query("roof loads").chunk_id, "roof-1")
 
     def test_unchanged_source_is_not_reindexed(self):
@@ -161,14 +188,14 @@ class ConstructionRAGTests(unittest.TestCase):
 
         self.assertFalse(first.unchanged)
         self.assertTrue(second.unchanged)
-        self.assertEqual(second.indexed_chunks, 3)
+        self.assertEqual(second.indexed_chunks, 4)
 
     def test_stale_chunks_are_removed_during_refresh(self):
         self.rag.index_chunks()
         self._write_records(self.records[:2])
         refreshed = self.rag.index_chunks()
 
-        self.assertEqual(refreshed.deleted_chunks, 1)
+        self.assertEqual(refreshed.deleted_chunks, 2)
         self.assertEqual(refreshed.indexed_chunks, 2)
         self.assertNotIn("collapse-1", self.rag.collection.get(include=[])["ids"])
 
@@ -187,6 +214,31 @@ class ConstructionRAGTests(unittest.TestCase):
         self.rag.index_chunks()
         with self.assertRaises(ValueError):
             self.rag.query("  ")
+
+    def test_document_routing_limits_ramp_query_to_document_k(self):
+        self.rag.index_chunks()
+        routing = self.rag.route_query("What gradient should a ramp use?")
+        results = self.rag.query_candidates("What gradient should a ramp use?", n_results=3)
+
+        self.assertEqual(routing.document_codes, ("K",))
+        self.assertTrue(results)
+        self.assertTrue(all(result.document_code == "K" for result in results))
+        self.assertIn("ramp", results[0].routing_reason)
+
+    def test_unrouted_query_searches_all_controlled_documents(self):
+        self.rag.index_chunks()
+        routing = self.rag.route_query("general controlled requirement")
+        self.assertEqual(routing.document_ids, ())
+        self.assertIn("searched all", routing.reason)
+
+    def test_scope_guard_reduces_unsupported_commercial_confidence(self):
+        self.rag.index_chunks()
+        routing = self.rag.route_query("foundation supplier price in Cairo")
+        candidate = self.rag.query_candidates("foundation supplier price in Cairo", n_results=1)[0]
+
+        self.assertTrue(routing.out_of_scope)
+        self.assertLess(candidate.similarity, candidate.semantic_similarity)
+        self.assertIn("scope guard", candidate.routing_reason)
 
 
 if __name__ == "__main__":

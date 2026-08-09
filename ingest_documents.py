@@ -46,6 +46,12 @@ class SourceIntegrityError(ValueError):
 @dataclass(frozen=True)
 class SourceDocument:
     document_id: str
+    document_code: str
+    discipline: str
+    authority: str
+    status: str
+    source_checked_date: str
+    effective_date: str
     file_path: Path
     title: str
     edition: str
@@ -58,7 +64,10 @@ class SourceDocument:
     expected_sha256: str
     expected_pages: int
     expected_text_pages: int
+    printed_page_start: int
+    printed_page_end: int
     retrieval_excluded_pages: tuple[int, ...]
+    routing_keywords: tuple[str, ...]
     usage_note: str
 
 
@@ -66,6 +75,13 @@ class SourceDocument:
 class DocumentChunk:
     chunk_id: str
     document_id: str
+    document_code: str
+    discipline: str
+    authority: str
+    status: str
+    source_checked_date: str
+    effective_date: str
+    routing_keywords: str
     title: str
     edition: str
     publication_date: str
@@ -196,10 +212,35 @@ def load_manifest(manifest_path: str | Path) -> tuple[SourceDocument, ...]:
             raise ManifestError(
                 f"retrieval_excluded_pages must contain unique valid PDF pages: {document_id}"
             )
+        printed_page_start = entry.get("printed_page_start")
+        printed_page_end = entry.get("printed_page_end")
+        if (
+            not isinstance(printed_page_start, int)
+            or isinstance(printed_page_start, bool)
+            or not isinstance(printed_page_end, int)
+            or isinstance(printed_page_end, bool)
+            or not 1 <= printed_page_start <= printed_page_end <= expected_pages
+        ):
+            raise ManifestError(
+                f"printed page range must be valid PDF page numbers: {document_id}"
+            )
+        routing_keywords = entry.get("routing_keywords")
+        if (
+            not isinstance(routing_keywords, list)
+            or not routing_keywords
+            or any(not isinstance(keyword, str) or not keyword.strip() for keyword in routing_keywords)
+        ):
+            raise ManifestError(f"routing_keywords must be non-empty strings: {document_id}")
 
         documents.append(
             SourceDocument(
                 document_id=document_id,
+                document_code=_required_string(entry, "document_code"),
+                discipline=_required_string(entry, "discipline"),
+                authority=_required_string(entry, "authority"),
+                status=_required_string(entry, "status"),
+                source_checked_date=_required_string(entry, "source_checked_date"),
+                effective_date=str(entry.get("effective_date", "")).strip(),
                 file_path=file_path,
                 title=_required_string(entry, "title"),
                 edition=_required_string(entry, "edition"),
@@ -212,7 +253,10 @@ def load_manifest(manifest_path: str | Path) -> tuple[SourceDocument, ...]:
                 expected_sha256=sha256,
                 expected_pages=expected_pages,
                 expected_text_pages=expected_text_pages,
+                printed_page_start=printed_page_start,
+                printed_page_end=printed_page_end,
                 retrieval_excluded_pages=tuple(sorted(retrieval_excluded_pages)),
+                routing_keywords=tuple(dict.fromkeys(keyword.strip() for keyword in routing_keywords)),
                 usage_note=_required_string(entry, "usage_note"),
             )
         )
@@ -448,6 +492,13 @@ def _make_chunk(
     return DocumentChunk(
         chunk_id=f"{document.document_id}-{suffix}",
         document_id=document.document_id,
+        document_code=document.document_code,
+        discipline=document.discipline,
+        authority=document.authority,
+        status=document.status,
+        source_checked_date=document.source_checked_date,
+        effective_date=document.effective_date,
+        routing_keywords=" | ".join(document.routing_keywords),
         title=document.title,
         edition=document.edition,
         publication_date=document.publication_date,
@@ -501,7 +552,16 @@ def ingest_document(
     current_clause = ""
 
     for page_number, raw_lines in enumerate(raw_pages, start=1):
-        printed_page_label = extracted_pages[page_number - 1].printed_page_label
+        extracted_label = extracted_pages[page_number - 1].printed_page_label
+        expected_label = ""
+        if document.printed_page_start <= page_number <= document.printed_page_end:
+            expected_label = str(page_number - document.printed_page_start + 1)
+        if extracted_label and expected_label and extracted_label != expected_label:
+            raise SourceIntegrityError(
+                f"Printed-page mismatch for {document.document_id} PDF page {page_number}: "
+                f"expected {expected_label}, extracted {extracted_label}"
+            )
+        printed_page_label = expected_label or extracted_label
         lines = _clean_page_lines(raw_lines, repeated_lines)
         if lines:
             nonempty_pages += 1

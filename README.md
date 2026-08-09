@@ -7,7 +7,7 @@ A private, local proof-of-concept that turns a controlled construction revision 
 ## What the system does
 
 1. Rejects irrelevant, ambiguous, contradictory, or incomplete notes before calling the LLM.
-2. Retrieves top-k cited passages from a persistent local ChromaDB index and refuses low-confidence matches.
+2. Routes each question to the relevant controlled discipline and retrieves top-k passages using semantic + BM25-style lexical ranking from persistent local ChromaDB.
 3. Uses a local Ollama design agent to extract a validated revision and one or more material requirements.
 4. Uses a local procurement agent to produce clearly labelled **unverified estimates**.
 5. Recalculates arithmetic and delivery dates deterministically in Python.
@@ -57,8 +57,11 @@ python ingest_documents.py
 
 The command verifies each PDF checksum and page count before creating
 `rag_data/chunks.jsonl`. Every chunk contains its document edition, jurisdiction,
-section or clause when detected, page number, official source URL, licence, and source
-checksum. `rag_data/` is generated locally and is intentionally not committed.
+discipline, document status, source-check date, section or clause when detected, printed
+and PDF page numbers, official source URL, licence, and source checksum. The controlled
+corpus contains official England Approved Documents A (structure), C (ground/moisture),
+K (falling/collision/impact), and 7 (materials/workmanship). `rag_data/` is generated
+locally and is intentionally not committed.
 
 Build the persistent vector index and run the labelled retrieval evaluation:
 
@@ -74,6 +77,11 @@ No hosted embedding API or API key is required. The index is stored under
 `index_documents.py` is idempotent when the controlled JSONL content has not changed.
 The collection contract records both the embedding model identity and its artifact SHA-256;
 an incompatible persisted collection is rejected rather than silently mixed.
+Retrieval first routes explicit discipline terms to the strongest matching document set,
+then combines 75% semantic similarity with 25% normalized lexical relevance. Queries with
+no route receive a confidence penalty, while commercial and out-of-jurisdiction intent is
+guarded explicitly. The current controlled build contains 586 auditable chunks, of which
+526 are retrieval eligible.
 
 Install and prepare Ollama:
 
@@ -127,7 +135,9 @@ Copy `.env.example` to `.env`.
 | `CONSTRUCTION_RAG_CHUNKS_PATH` | `rag_data/chunks.jsonl` | Verified citation-ready ingestion output |
 | `CONSTRUCTION_RAG_INDEX_PATH` | `rag_data/chroma` | Persistent local ChromaDB directory |
 | `CONSTRUCTION_RAG_TOP_K` | `3` | Maximum cited passages supplied to the design agent |
-| `CONSTRUCTION_RAG_MINIMUM_SIMILARITY` | `0.45` | Calibrated cosine-similarity acceptance floor |
+| `CONSTRUCTION_RAG_MINIMUM_SIMILARITY` | `0.45` | Calibrated hybrid-score acceptance floor |
+| `CONSTRUCTION_RAG_SEMANTIC_WEIGHT` | `0.75` | Semantic component of the hybrid retrieval score |
+| `CONSTRUCTION_RAG_LEXICAL_WEIGHT` | `0.25` | BM25-style lexical component of the hybrid retrieval score |
 
 ## Main files
 
@@ -135,7 +145,7 @@ Copy `.env.example` to `.env`.
 |---|---|
 | `validation.py` | Rejects unsafe or incomplete inputs before the LLM |
 | `schemas.py` | Pydantic contracts and numeric constraints |
-| `rag_engine.py` | Persistent ChromaDB retrieval, citations, and confidence rejection |
+| `rag_engine.py` | Discipline routing, hybrid retrieval, persistent ChromaDB, citations, and confidence rejection |
 | `ingest_documents.py` | Verified PDF extraction and citation-ready chunk generation |
 | `index_documents.py` | Idempotent local MiniLM embedding and persistent indexing |
 | `evaluate_rag.py` | Labelled Hit@k, MRR, acceptance, and rejection evaluation |
@@ -150,11 +160,14 @@ Copy `.env.example` to `.env`.
 
 - Procurement suppliers and prices are LLM planning estimates and are stored as `PENDING_VERIFICATION` / `LLM_ESTIMATE_UNVERIFIED`.
 - Delivery dates and total costs are recalculated in Python instead of being trusted from the model.
-- The live retriever uses the controlled PDF chunks, local trained MiniLM embeddings,
-  persistent ChromaDB storage, top-k citations, and a calibrated confidence threshold.
-- The current labelled set has six in-scope and six out-of-scope questions. Passing it
+- The live retriever uses controlled PDF chunks, local trained MiniLM embeddings,
+  BM25-style lexical evidence, discipline routing, persistent ChromaDB storage, top-k
+  citations, and a calibrated hybrid confidence threshold.
+- The current labelled set has 18 in-scope and 7 out-of-scope questions. The verified
+  build reaches 100% Hit@5, Top-1 accuracy, MRR, routing accuracy, positive acceptance,
+  and negative rejection on that set. Passing it
   demonstrates this controlled corpus and query set; it is not a general compliance benchmark.
-- The included Approved Document A source applies to England and is not an Egyptian
+- The included Approved Documents A, C, K and 7 apply to England and are not Egyptian
   compliance authority. Consult the controlled official publication and a licensed engineer
   for engineering decisions.
 - The CPM model is a five-task demonstration schedule, not a live Primavera P6 or Microsoft Project integration.

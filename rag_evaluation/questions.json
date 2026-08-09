@@ -1,23 +1,41 @@
 {
   "schema_version": 1,
-  "description": "Labelled retrieval checks for the controlled Approved Document A source.",
+  "description": "Labelled multi-document retrieval checks for controlled UK Approved Documents A, C, K and 7.",
   "targets": {
     "minimum_hit_at_k": 1.0,
     "minimum_positive_acceptance_rate": 1.0,
-    "minimum_negative_rejection_rate": 1.0
+    "minimum_negative_rejection_rate": 1.0,
+    "minimum_routing_accuracy": 1.0
   },
   "cases": [
-    {"id": "foundation-strip-width", "kind": "positive", "query": "minimum width of strip foundations", "expected_document_id": "uk-approved-document-a-structure-2013", "expected_pdf_pages": [38, 39]},
-    {"id": "wall-cladding-fixings", "kind": "positive", "query": "how should wall cladding be supported and fixed", "expected_document_id": "uk-approved-document-a-structure-2013", "expected_pdf_pages": [40]},
-    {"id": "disproportionate-collapse", "kind": "positive", "query": "how to reduce sensitivity to disproportionate collapse", "expected_document_id": "uk-approved-document-a-structure-2013", "expected_pdf_pages": [43, 45, 46]},
-    {"id": "loads-transmitted-safely", "kind": "positive", "query": "what loads must be sustained and transmitted safely", "expected_document_id": "uk-approved-document-a-structure-2013", "expected_pdf_pages": [7, 8]},
-    {"id": "roof-recovering", "kind": "positive", "query": "requirements for roof re-covering", "expected_document_id": "uk-approved-document-a-structure-2013", "expected_pdf_pages": [42]},
-    {"id": "ground-movement", "kind": "positive", "query": "ground movement shrinkage and subsidence", "expected_document_id": "uk-approved-document-a-structure-2013", "expected_pdf_pages": [7, 8]},
-    {"id": "steel-price-cairo", "kind": "negative", "query": "current steel price in Cairo"},
-    {"id": "supplier-phone-egypt", "kind": "negative", "query": "concrete supplier phone number in Egypt"},
-    {"id": "fire-travel-distance", "kind": "negative", "query": "fire escape travel distance requirements"},
-    {"id": "electrical-current-rating", "kind": "negative", "query": "electrical cable current rating"},
-    {"id": "accessibility-ramp", "kind": "negative", "query": "wheelchair ramp gradient"},
-    {"id": "building-permit-fees", "kind": "negative", "query": "Egyptian building permit fees"}
+    {"id": "a-foundation-strip-width", "kind": "positive", "query": "minimum width of strip foundations", "expected_document_id": "uk-approved-document-a-structure-2013", "expected_document_code": "A", "expected_pdf_pages": [38, 39]},
+    {"id": "a-wall-cladding-fixings", "kind": "positive", "query": "how should wall cladding be supported and fixed", "expected_document_id": "uk-approved-document-a-structure-2013", "expected_document_code": "A", "expected_pdf_pages": [40]},
+    {"id": "a-disproportionate-collapse", "kind": "positive", "query": "how to reduce sensitivity to disproportionate collapse", "expected_document_id": "uk-approved-document-a-structure-2013", "expected_document_code": "A", "expected_pdf_pages": [43, 44, 45, 46]},
+    {"id": "a-loads-transmitted-safely", "kind": "positive", "query": "what loads must be sustained and transmitted safely", "expected_document_id": "uk-approved-document-a-structure-2013", "expected_document_code": "A", "expected_pdf_pages": [7, 8]},
+    {"id": "a-roof-recovering", "kind": "positive", "query": "requirements for roof re-covering", "expected_document_id": "uk-approved-document-a-structure-2013", "expected_document_code": "A", "expected_pdf_pages": [42]},
+    {"id": "a-ground-movement", "kind": "positive", "query": "ground movement shrinkage and subsidence", "expected_document_id": "uk-approved-document-a-structure-2013", "expected_document_code": "A", "expected_pdf_pages": [7, 8]},
+
+    {"id": "c-subsoil-drainage", "kind": "positive", "query": "subsoil drainage requirements", "expected_document_id": "uk-approved-document-c-2013", "expected_document_code": "C", "expected_pdf_pages": [24, 25]},
+    {"id": "c-damp-proof-course", "kind": "positive", "query": "damp proof course ground moisture", "expected_document_id": "uk-approved-document-c-2013", "expected_document_code": "C", "expected_pdf_pages": [27, 31]},
+    {"id": "c-radon", "kind": "positive", "query": "protect buildings from radon gas", "expected_document_id": "uk-approved-document-c-2013", "expected_document_code": "C", "expected_pdf_pages": [11, 23]},
+    {"id": "c-roof-condensation", "kind": "positive", "query": "prevent condensation in roofs", "expected_document_id": "uk-approved-document-c-2013", "expected_document_code": "C", "expected_pdf_pages": [41, 42]},
+
+    {"id": "k-stair-rise-going", "kind": "positive", "query": "stair rise and going requirements", "expected_document_id": "uk-approved-document-k-2013", "expected_document_code": "K", "expected_pdf_pages": [15, 23]},
+    {"id": "k-ramp-gradient", "kind": "positive", "query": "maximum ramp gradient", "expected_document_id": "uk-approved-document-k-2013", "expected_document_code": "K", "expected_pdf_pages": [28, 29, 30]},
+    {"id": "k-guarding-height", "kind": "positive", "query": "minimum guarding height", "expected_document_id": "uk-approved-document-k-2013", "expected_document_code": "K", "expected_pdf_pages": [33, 34]},
+    {"id": "k-safety-glazing", "kind": "positive", "query": "critical locations for safety glazing", "expected_document_id": "uk-approved-document-k-2013", "expected_document_code": "K", "expected_pdf_pages": [41, 49]},
+
+    {"id": "7-adequate-materials", "kind": "positive", "query": "adequate and proper materials", "expected_document_id": "uk-approved-document-7-2018", "expected_document_code": "7", "expected_pdf_pages": [10, 12, 14]},
+    {"id": "7-ce-fitness", "kind": "positive", "query": "CE marking and fitness for purpose", "expected_document_id": "uk-approved-document-7-2018", "expected_document_code": "7", "expected_pdf_pages": [12, 13]},
+    {"id": "7-workmanship", "kind": "positive", "query": "requirements for workmanship", "expected_document_id": "uk-approved-document-7-2018", "expected_document_code": "7", "expected_pdf_pages": [11, 15]},
+    {"id": "7-short-lived", "kind": "positive", "query": "short-lived materials in buildings", "expected_document_id": "uk-approved-document-7-2018", "expected_document_code": "7", "expected_pdf_pages": [14]},
+
+    {"id": "negative-steel-price-cairo", "kind": "negative", "query": "current steel price in Cairo"},
+    {"id": "negative-supplier-phone-egypt", "kind": "negative", "query": "concrete supplier phone number in Egypt"},
+    {"id": "negative-fire-travel-distance", "kind": "negative", "query": "fire escape travel distance requirements"},
+    {"id": "negative-electrical-current-rating", "kind": "negative", "query": "electrical cable current rating"},
+    {"id": "negative-boiler-ventilation", "kind": "negative", "query": "boiler ventilation requirements"},
+    {"id": "negative-building-permit-fees", "kind": "negative", "query": "Egyptian building permit fees"},
+    {"id": "negative-current-weather", "kind": "negative", "query": "current weather in London"}
   ]
 }

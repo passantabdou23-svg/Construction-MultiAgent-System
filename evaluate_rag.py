@@ -45,15 +45,18 @@ def load_evaluation_set(path: str | Path) -> dict[str, Any]:
         if kind == "positive":
             pages = case.get("expected_pdf_pages")
             document_id = case.get("expected_document_id")
+            document_code = case.get("expected_document_code")
             if (
                 not isinstance(document_id, str)
                 or not document_id
+                or not isinstance(document_code, str)
+                or not document_code
                 or not isinstance(pages, list)
                 or not pages
                 or any(not isinstance(page, int) or page < 1 for page in pages)
             ):
                 raise RAGEvaluationError(
-                    f"Positive case '{case_id}' needs a document id and positive PDF pages"
+                    f"Positive case '{case_id}' needs a document id, code, and positive PDF pages"
                 )
         seen_ids.add(case_id)
     return payload
@@ -81,11 +84,12 @@ def evaluate_cases(
     results: list[dict[str, Any]] = []
     positive_ranks: list[int | None] = []
     positive_acceptances: list[bool] = []
+    routing_matches: list[bool] = []
     negative_rejections: list[bool] = []
     for case in evaluation["cases"]:
         candidates = rag.query_candidates(case["query"], n_results=top_k)
         top_similarity = candidates[0].similarity
-        accepted = top_similarity >= threshold
+        accepted = bool(top_similarity >= threshold)
         rank: int | None = None
         if case["kind"] == "positive":
             rank = next(
@@ -94,11 +98,17 @@ def evaluate_cases(
             )
             positive_ranks.append(rank)
             positive_acceptances.append(accepted)
-            passed = rank is not None and accepted
+            route_query = getattr(rag, "route_query", None)
+            routing_matches.append(bool(
+                True
+                if route_query is None
+                else case["expected_document_code"] in route_query(case["query"]).document_codes
+            ))
+            passed = bool(rank is not None and accepted)
         else:
             rejected = not accepted
             negative_rejections.append(rejected)
-            passed = rejected
+            passed = bool(rejected)
         results.append(
             {
                 "id": case["id"],
@@ -108,15 +118,20 @@ def evaluate_cases(
                 "accepted": accepted,
                 "relevant_rank": rank,
                 "top_similarity": round(top_similarity, 6),
+                "routing_reason": candidates[0].routing_reason,
                 "candidates": [
                     {
                         "rank": position,
                         "chunk_id": candidate.chunk_id,
                         "document_id": candidate.document_id,
+                        "document_code": candidate.document_code,
+                        "discipline": candidate.discipline,
                         "pdf_page": candidate.page_number,
                         "printed_page": candidate.printed_page_label,
                         "section": candidate.section,
                         "similarity": round(candidate.similarity, 6),
+                        "semantic_similarity": round(candidate.semantic_similarity, 6),
+                        "lexical_similarity": round(candidate.lexical_similarity, 6),
                         "source_url": candidate.source_url,
                     }
                     for position, candidate in enumerate(candidates, start=1)
@@ -135,12 +150,14 @@ def evaluate_cases(
         "top_1_accuracy": sum(rank == 1 for rank in positive_ranks) / positive_count,
         "mean_reciprocal_rank": sum(0 if rank is None else 1 / rank for rank in positive_ranks) / positive_count,
         "positive_acceptance_rate": sum(positive_acceptances) / positive_count,
+        "routing_accuracy": sum(routing_matches) / positive_count,
         "negative_rejection_rate": sum(negative_rejections) / negative_count,
     }
     targets = evaluation.get("targets", {})
     targets_met = (
         metrics["hit_at_k"] >= float(targets.get("minimum_hit_at_k", 0))
         and metrics["positive_acceptance_rate"] >= float(targets.get("minimum_positive_acceptance_rate", 0))
+        and metrics["routing_accuracy"] >= float(targets.get("minimum_routing_accuracy", 0))
         and metrics["negative_rejection_rate"] >= float(targets.get("minimum_negative_rejection_rate", 0))
     )
     return {
@@ -192,6 +209,7 @@ def main() -> None:
     print(f"  Top-1 accuracy: {metrics['top_1_accuracy']:.1%}")
     print(f"  Mean reciprocal rank: {metrics['mean_reciprocal_rank']:.3f}")
     print(f"  Positive acceptance: {metrics['positive_acceptance_rate']:.1%}")
+    print(f"  Document routing accuracy: {metrics['routing_accuracy']:.1%}")
     print(f"  Negative rejection: {metrics['negative_rejection_rate']:.1%}")
     print(f"  Threshold: {arguments.threshold:.3f}")
     print(f"  Targets met: {report['targets_met']}")
