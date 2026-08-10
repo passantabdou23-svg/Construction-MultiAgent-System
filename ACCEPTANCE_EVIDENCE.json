@@ -1,0 +1,118 @@
+{
+  "backup": {
+    "artifact_name": "construction_mas_pre-release_20260810T084816Z_a8fea58d.db",
+    "audit_event_count": 18,
+    "audit_head_hash": "7b9fe01873c8f2298ffd3508744dfc3e6f7eef9b7c215d56baa8c90dd0dc4984",
+    "sha256": "98c57970050478110f7b53d43d7b10ff3008689b8f8cce4574b5f8fc3f157025",
+    "size_bytes": 118784
+  },
+  "commit": "b76e39b20639e589ec0392bef596838568707428",
+  "database": {
+    "audit_event_count": 18,
+    "audit_head_hash": "7b9fe01873c8f2298ffd3508744dfc3e6f7eef9b7c215d56baa8c90dd0dc4984",
+    "audit_valid": true,
+    "counts": {
+      "active_users": 3,
+      "audit_events": 18,
+      "materials": 1,
+      "pending_approvals": 0,
+      "quotes": 1,
+      "rejected_runs": 0,
+      "revisions": 1,
+      "schedule_impacts": 1
+    }
+  },
+  "generated_at_utc": "2026-08-10T11:55:07+00:00",
+  "grounding": {
+    "metrics": {
+      "guard_rejection_cases": 7,
+      "guard_rejection_rate": 1.0,
+      "supported_acceptance_rate": 1.0,
+      "supported_cases": 4
+    },
+    "targets_met": true
+  },
+  "overall_passed": true,
+  "python": "3.12.0",
+  "release_checks": [
+    {
+      "detail": "Python 3.12.0",
+      "name": "python",
+      "passed": true
+    },
+    {
+      "detail": "10 exact dependency pins installed",
+      "name": "dependencies",
+      "passed": true
+    },
+    {
+      "detail": "14 release files present; app.py compiles",
+      "name": "release_files",
+      "passed": true
+    },
+    {
+      "detail": "8 runtime/secret ignore rules present",
+      "name": "ignore_contract",
+      "passed": true
+    },
+    {
+      "detail": "4 controlled PDFs verified (198 pages)",
+      "name": "controlled_sources",
+      "passed": true
+    },
+    {
+      "detail": "SQLite integrity/foreign keys valid; audit events=18; head=7b9fe01873c8f2298ffd3508744dfc3e6f7eef9b7c215d56baa8c90dd0dc4984",
+      "name": "database",
+      "passed": true
+    },
+    {
+      "detail": "586 auditable chunks; 526 retrieval-eligible vectors",
+      "name": "runtime_rag",
+      "passed": true
+    },
+    {
+      "detail": "Ollama reachable; configured model 'llama3.1' installed",
+      "name": "ollama",
+      "passed": true
+    }
+  ],
+  "repository_tests": {
+    "errors": 0,
+    "failures": 0,
+    "passed": true,
+    "skipped": 0,
+    "tests_run": 73
+  },
+  "retrieval": {
+    "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+    "embedding_model_sha256": "913d7300ceae3b2dbc2c50d1de4baacab4be7b9380491c27fab7418616a16ec3",
+    "metrics": {
+      "hit_at_k": 1.0,
+      "mean_reciprocal_rank": 1.0,
+      "negative_cases": 7,
+      "negative_rejection_rate": 1.0,
+      "positive_acceptance_rate": 1.0,
+      "positive_cases": 18,
+      "routing_accuracy": 1.0,
+      "top_1_accuracy": 1.0
+    },
+    "targets_met": true,
+    "threshold": 0.45,
+    "top_k": 5
+  },
+  "schema_version": 2,
+  "scope_boundary": {
+    "deployment": "Controlled single-workstation planning prototype",
+    "engineering": "Does not replace a licensed engineer or regulatory approval",
+    "identity": "Local authentication; no MFA, enterprise SSO, or legal signature",
+    "jurisdiction": "Controlled Approved Documents apply to England",
+    "procurement": "LLM estimates remain pending independent verification"
+  },
+  "stress_tests": {
+    "errors": 0,
+    "failures": 0,
+    "passed": true,
+    "skipped": 0,
+    "tests_run": 3
+  }
+}

@@ -40,6 +40,9 @@ REQUIRED_RELEASE_FILES = (
     "manage_backup.py",
     "manage_users.py",
     "requirements.txt",
+    "generate_acceptance_evidence.py",
+    "ACCEPTANCE_REPORT.md",
+    "ACCEPTANCE_EVIDENCE.json",
 )
 
 REQUIRED_IGNORE_RULES = (
