@@ -5,13 +5,19 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Sequence
 
+from audit import append_audit_event
 from settings import settings
 
 
 DB_NAME = settings.database_path
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def connect_db(db_path: str | Path = DB_NAME) -> sqlite3.Connection:
@@ -51,6 +57,49 @@ def init_db(db_path: str | Path = DB_NAME) -> None:
     with transaction(db_path) as connection:
         connection.executescript(
             """
+            CREATE TABLE IF NOT EXISTS users (
+                user_id TEXT PRIMARY KEY,
+                username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                display_name TEXT NOT NULL,
+                role TEXT NOT NULL CHECK(role IN (
+                    'PREPARER', 'DESIGN_REVIEWER', 'PROJECT_MANAGER', 'ADMIN'
+                )),
+                password_algorithm TEXT NOT NULL,
+                password_salt TEXT NOT NULL,
+                password_hash TEXT NOT NULL,
+                password_parameters_json TEXT NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT 1,
+                failed_attempts INTEGER NOT NULL DEFAULT 0 CHECK(failed_attempts >= 0),
+                locked_until TEXT,
+                last_login_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                password_changed_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS audit_chain_head (
+                singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1),
+                event_count INTEGER NOT NULL CHECK(event_count >= 0),
+                head_hash TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS audit_events (
+                event_id TEXT PRIMARY KEY,
+                sequence_number INTEGER NOT NULL UNIQUE CHECK(sequence_number > 0),
+                actor_user_id TEXT,
+                event_type TEXT NOT NULL,
+                target_type TEXT NOT NULL,
+                target_id TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                details_json TEXT NOT NULL,
+                occurred_at TEXT NOT NULL,
+                previous_hash TEXT NOT NULL,
+                event_hash TEXT NOT NULL,
+                FOREIGN KEY(actor_user_id) REFERENCES users(user_id)
+                    ON UPDATE CASCADE ON DELETE SET NULL
+            );
+
             CREATE TABLE IF NOT EXISTS design_revisions (
                 revision_id TEXT PRIMARY KEY,
                 affected_element TEXT NOT NULL,
@@ -104,17 +153,22 @@ def init_db(db_path: str | Path = DB_NAME) -> None:
                 site_note TEXT NOT NULL,
                 status TEXT NOT NULL CHECK(status IN ('RUNNING', 'COMPLETED', 'REJECTED', 'FAILED')),
                 revision_id TEXT,
+                created_by_user_id TEXT,
                 error_message TEXT,
                 started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 completed_at DATETIME,
                 FOREIGN KEY(revision_id) REFERENCES design_revisions(revision_id)
-                    ON UPDATE CASCADE ON DELETE SET NULL
+                    ON UPDATE CASCADE ON DELETE SET NULL,
+                FOREIGN KEY(created_by_user_id) REFERENCES users(user_id)
+                    ON UPDATE CASCADE ON DELETE RESTRICT
             );
 
             CREATE TABLE IF NOT EXISTS approval_requests (
                 review_id TEXT PRIMARY KEY,
                 run_id TEXT NOT NULL UNIQUE,
                 revision_id TEXT NOT NULL,
+                prepared_by_user_id TEXT,
+                decided_by_user_id TEXT,
                 status TEXT NOT NULL CHECK(status IN ('PENDING', 'APPROVED', 'REJECTED')),
                 payload_json TEXT NOT NULL,
                 payload_sha256 TEXT NOT NULL,
@@ -126,6 +180,10 @@ def init_db(db_path: str | Path = DB_NAME) -> None:
                 FOREIGN KEY(run_id) REFERENCES pipeline_runs(run_id)
                     ON UPDATE CASCADE ON DELETE CASCADE,
                 FOREIGN KEY(revision_id) REFERENCES design_revisions(revision_id)
+                    ON UPDATE CASCADE ON DELETE RESTRICT,
+                FOREIGN KEY(prepared_by_user_id) REFERENCES users(user_id)
+                    ON UPDATE CASCADE ON DELETE RESTRICT,
+                FOREIGN KEY(decided_by_user_id) REFERENCES users(user_id)
                     ON UPDATE CASCADE ON DELETE RESTRICT
             );
             """
@@ -166,6 +224,9 @@ def init_db(db_path: str | Path = DB_NAME) -> None:
             "workflow_stage",
             "TEXT NOT NULL DEFAULT 'EXECUTING'",
         )
+        _add_column_if_missing(connection, "pipeline_runs", "created_by_user_id", "TEXT")
+        _add_column_if_missing(connection, "approval_requests", "prepared_by_user_id", "TEXT")
+        _add_column_if_missing(connection, "approval_requests", "decided_by_user_id", "TEXT")
         connection.execute(
             """
             UPDATE pipeline_runs
@@ -371,16 +432,28 @@ def save_schedule_log(
 def start_pipeline_run(
     run_id: str,
     site_note: str,
+    created_by_user_id: str,
     *,
     db_path: str | Path = DB_NAME,
 ) -> None:
     with transaction(db_path) as connection:
         connection.execute(
             """
-            INSERT INTO pipeline_runs (run_id, site_note, status, workflow_stage)
-            VALUES (?, ?, 'RUNNING', 'EXECUTING')
+            INSERT INTO pipeline_runs (
+                run_id, site_note, status, workflow_stage, created_by_user_id
+            ) VALUES (?, ?, 'RUNNING', 'EXECUTING', ?)
             """,
-            (run_id, site_note),
+            (run_id, site_note, created_by_user_id),
+        )
+        append_audit_event(
+            connection,
+            actor_user_id=created_by_user_id,
+            event_type="PIPELINE_STARTED",
+            target_type="PIPELINE_RUN",
+            target_id=run_id,
+            outcome="SUCCESS",
+            occurred_at=_utc_timestamp(),
+            details={"workflow_stage": "EXECUTING"},
         )
 
 
@@ -388,6 +461,7 @@ def create_approval_request(
     review_id: str,
     run_id: str,
     revision_id: str,
+    prepared_by_user_id: str,
     payload_json: str,
     payload_sha256: str,
     *,
@@ -397,10 +471,18 @@ def create_approval_request(
         connection.execute(
             """
             INSERT INTO approval_requests (
-                review_id, run_id, revision_id, status, payload_json, payload_sha256
-            ) VALUES (?, ?, ?, 'PENDING', ?, ?)
+                review_id, run_id, revision_id, prepared_by_user_id, status,
+                payload_json, payload_sha256
+            ) VALUES (?, ?, ?, ?, 'PENDING', ?, ?)
             """,
-            (review_id, run_id, revision_id, payload_json, payload_sha256),
+            (
+                review_id,
+                run_id,
+                revision_id,
+                prepared_by_user_id,
+                payload_json,
+                payload_sha256,
+            ),
         )
         cursor = connection.execute(
             """
@@ -413,6 +495,20 @@ def create_approval_request(
         )
         if cursor.rowcount != 1:
             raise ValueError(f"Pipeline run {run_id} is not ready for approval")
+        append_audit_event(
+            connection,
+            actor_user_id=prepared_by_user_id,
+            event_type="REVIEW_PACKAGE_CREATED",
+            target_type="APPROVAL_REQUEST",
+            target_id=review_id,
+            outcome="SUCCESS",
+            occurred_at=_utc_timestamp(),
+            details={
+                "run_id": run_id,
+                "revision_id": revision_id,
+                "payload_sha256": payload_sha256,
+            },
+        )
 
 
 def get_approval_request(
@@ -424,9 +520,15 @@ def get_approval_request(
     try:
         row = connection.execute(
             """
-            SELECT ar.*, pr.site_note
+            SELECT ar.*, pr.site_note,
+                   preparer.username AS preparer_username,
+                   preparer.display_name AS preparer_display_name,
+                   decider.username AS decider_username,
+                   decider.display_name AS decider_display_name
             FROM approval_requests AS ar
             JOIN pipeline_runs AS pr USING (run_id)
+            LEFT JOIN users AS preparer ON preparer.user_id = ar.prepared_by_user_id
+            LEFT JOIN users AS decider ON decider.user_id = ar.decided_by_user_id
             WHERE ar.review_id = ?
             """,
             (review_id,),
@@ -444,10 +546,14 @@ def list_pending_approval_requests(
     try:
         rows = connection.execute(
             """
-            SELECT review_id, run_id, revision_id, status, payload_sha256, requested_at
-            FROM approval_requests
-            WHERE status = 'PENDING'
-            ORDER BY requested_at, review_id
+            SELECT ar.review_id, ar.run_id, ar.revision_id, ar.prepared_by_user_id,
+                   ar.status, ar.payload_sha256, ar.requested_at,
+                   users.username AS preparer_username,
+                   users.display_name AS preparer_display_name
+            FROM approval_requests AS ar
+            LEFT JOIN users ON users.user_id = ar.prepared_by_user_id
+            WHERE ar.status = 'PENDING'
+            ORDER BY ar.requested_at, ar.review_id
             """
         ).fetchall()
         return [dict(row) for row in rows]
@@ -459,8 +565,7 @@ def record_approval_decision(
     review_id: str,
     *,
     status: str,
-    reviewer_name: str,
-    reviewer_role: str,
+    decided_by_user_id: str,
     review_comment: str,
     expected_payload_sha256: str,
     db_path: str | Path = DB_NAME,
@@ -471,12 +576,15 @@ def record_approval_decision(
         state = connection.execute(
             """
             SELECT ar.status AS review_status, ar.payload_sha256,
-                   pr.status AS run_status, pr.workflow_stage
+                   ar.prepared_by_user_id, pr.status AS run_status, pr.workflow_stage,
+                   users.display_name AS reviewer_name, users.role AS reviewer_role,
+                   users.is_active AS reviewer_is_active
             FROM approval_requests AS ar
             JOIN pipeline_runs AS pr USING (run_id)
+            JOIN users ON users.user_id = ?
             WHERE ar.review_id = ?
             """,
-            (review_id,),
+            (decided_by_user_id, review_id),
         ).fetchone()
         if (
             state is None
@@ -484,19 +592,26 @@ def record_approval_decision(
             or state["payload_sha256"] != expected_payload_sha256
             or state["run_status"] != "RUNNING"
             or state["workflow_stage"] != "AWAITING_APPROVAL"
+            or not state["reviewer_is_active"]
+            or state["reviewer_role"] not in {"DESIGN_REVIEWER", "PROJECT_MANAGER"}
+            or not state["prepared_by_user_id"]
+            or state["prepared_by_user_id"] == decided_by_user_id
         ):
-            raise ValueError("Approval request is missing, already decided, or has changed")
+            raise ValueError(
+                "Approval request is missing, changed, unauthorized, or violates separation of duties"
+            )
         cursor = connection.execute(
             """
             UPDATE approval_requests
-            SET status = ?, reviewer_name = ?, reviewer_role = ?, review_comment = ?,
-                decided_at = CURRENT_TIMESTAMP
+            SET status = ?, decided_by_user_id = ?, reviewer_name = ?, reviewer_role = ?,
+                review_comment = ?, decided_at = CURRENT_TIMESTAMP
             WHERE review_id = ? AND status = 'PENDING' AND payload_sha256 = ?
             """,
             (
                 status,
-                reviewer_name,
-                reviewer_role,
+                decided_by_user_id,
+                state["reviewer_name"],
+                state["reviewer_role"],
                 review_comment,
                 review_id,
                 expected_payload_sha256,
@@ -504,6 +619,19 @@ def record_approval_decision(
         )
         if cursor.rowcount != 1:
             raise ValueError("Approval request is missing, already decided, or has changed")
+        append_audit_event(
+            connection,
+            actor_user_id=decided_by_user_id,
+            event_type=f"REVIEW_{status}",
+            target_type="APPROVAL_REQUEST",
+            target_id=review_id,
+            outcome="SUCCESS",
+            occurred_at=_utc_timestamp(),
+            details={
+                "payload_sha256": expected_payload_sha256,
+                "reviewer_role": state["reviewer_role"],
+            },
+        )
         if status == "REJECTED":
             run_cursor = connection.execute(
                 """
@@ -561,6 +689,7 @@ def finish_pipeline_run(
     *,
     revision_id: str | None = None,
     error_message: str | None = None,
+    actor_user_id: str | None = None,
     db_path: str | Path = DB_NAME,
 ) -> None:
     with transaction(db_path) as connection:
@@ -573,9 +702,21 @@ def finish_pipeline_run(
             """,
             (status, revision_id, error_message, run_id),
         )
+        append_audit_event(
+            connection,
+            actor_user_id=actor_user_id,
+            event_type=f"PIPELINE_{status}",
+            target_type="PIPELINE_RUN",
+            target_id=run_id,
+            outcome="SUCCESS" if status == "COMPLETED" else "STOPPED",
+            occurred_at=_utc_timestamp(),
+            details={"revision_id": revision_id, "error_message": error_message},
+        )
 
 
 TABLES = {
+    "users",
+    "audit_events",
     "design_revisions",
     "material_requirements",
     "procurement_records",
@@ -600,6 +741,10 @@ def database_counts(db_path: str | Path = DB_NAME) -> dict[str, int]:
     connection = connect_db(db_path)
     try:
         return {
+            "active_users": connection.execute(
+                "SELECT COUNT(*) FROM users WHERE is_active = 1"
+            ).fetchone()[0],
+            "audit_events": connection.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0],
             "revisions": connection.execute("SELECT COUNT(*) FROM design_revisions").fetchone()[0],
             "materials": connection.execute("SELECT COUNT(*) FROM material_requirements").fetchone()[0],
             "quotes": connection.execute("SELECT COUNT(*) FROM procurement_records").fetchone()[0],

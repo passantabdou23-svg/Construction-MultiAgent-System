@@ -128,12 +128,10 @@ class RetrievedEvidence(BaseModel):
 
 
 class ReviewDecisionInput(BaseModel):
-    """A self-identified human decision; authentication is outside this local prototype."""
+    """Decision content; authenticated identity is supplied by the server-side principal."""
 
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
-    reviewer_name: str = Field(min_length=2, max_length=120)
-    reviewer_role: Literal["Design engineer", "Project manager", "Authorized reviewer"]
     decision: Literal["APPROVE", "REJECT"]
     comment: str = Field(default="", max_length=2_000)
 
@@ -148,10 +146,16 @@ class ApprovalReviewRecord(BaseModel):
     review_id: str
     run_id: str
     revision_id: str
+    prepared_by_user_id: str | None = None
+    decided_by_user_id: str | None = None
     status: Literal["PENDING", "APPROVED", "REJECTED"]
     payload_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     reviewer_name: str | None = None
     reviewer_role: str | None = None
+    preparer_username: str | None = None
+    preparer_display_name: str | None = None
+    decider_username: str | None = None
+    decider_display_name: str | None = None
     review_comment: str | None = None
     requested_at: str | None = None
     decided_at: str | None = None

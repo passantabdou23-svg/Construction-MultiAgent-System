@@ -1,6 +1,6 @@
 # Construction Multi-Agent System
 
-A private, local proof-of-concept that turns a controlled construction revision note into a traceable design extraction, human review package, procurement planning estimate, and Critical Path Method (CPM) impact. The language-model agents run through Ollama; deterministic Python validation and Pydantic contracts prevent invalid notes and malformed model output from entering the audit database.
+A private, local proof-of-concept that turns a controlled construction revision note into a traceable design extraction, authenticated human review package, procurement planning estimate, and Critical Path Method (CPM) impact. The language-model agents run through Ollama; deterministic Python validation, Pydantic contracts, role-based authorization, and a hash-chained audit ledger prevent invalid or unauthorized actions from silently entering the workflow.
 
 > This application supports planning demonstrations. It does not replace a licensed engineer, a verified supplier quotation, an approved project programme, or access to the full licensed standards.
 
@@ -10,30 +10,32 @@ A private, local proof-of-concept that turns a controlled construction revision 
 2. Routes each question to the relevant controlled discipline and retrieves top-k passages using semantic + BM25-style lexical ranking from persistent local ChromaDB.
 3. Uses a local Ollama design agent to extract a validated revision and claim-level technical guidance.
 4. Verifies that every technical claim cites a retrieved chunk and contains a verbatim supporting quote.
-5. Creates an immutable SHA-256 review snapshot and waits for one recorded human decision.
-6. Blocks procurement and scheduling when the package is pending, rejected, changed, or replayed.
-7. After approval, uses a local procurement agent to produce clearly labelled **unverified estimates**.
-8. Recalculates arithmetic and delivery dates deterministically in Python.
-9. Maps the affected element to the correct task in the demonstration CPM network.
-10. Stores pending, approved, rejected, completed, and failed workflow events in SQLite.
+5. Requires a signed-in `PREPARER` account before creating an immutable SHA-256 review snapshot.
+6. Requires a different authenticated `DESIGN_REVIEWER` or `PROJECT_MANAGER` account and fresh password verification before one decision.
+7. Blocks procurement and scheduling when the package is pending, rejected, changed, replayed, self-reviewed, or unauthorized.
+8. After approval, uses a local procurement agent to produce clearly labelled **unverified estimates**.
+9. Recalculates arithmetic and delivery dates deterministically in Python.
+10. Maps the affected element to the correct task in the demonstration CPM network.
+11. Stores authentication, authorization, approval, rejection, completion, and failure events in an ordered SHA-256 audit chain.
 
 ```mermaid
 flowchart LR
-    A["Site revision note"] --> B{"Deterministic validation"}
-    B -->|"Rejected"| C["Audit rejected run"]
-    B -->|"Accepted"| D["Local ChromaDB retrieval"]
+    A["Authenticated PREPARER"] --> B["Site revision note"]
+    B --> C{"Deterministic validation"}
+    C -->|"Rejected"| R["Audit rejected run"]
+    C -->|"Accepted"| D["Local ChromaDB retrieval"]
     D --> E["Ollama design agent"]
     E --> F{"Claim + citation contract"}
     F --> G{"Deterministic grounding verification"}
-    G -->|"Refused"| C
+    G -->|"Refused"| R
     G -->|"Verified"| H["Immutable review snapshot"]
-    H --> I{"Recorded human decision"}
-    I -->|"Rejected"| C
+    H --> I{"Different authorized reviewer + reauthentication"}
+    I -->|"Rejected"| R
     I -->|"Approved"| J["Ollama procurement agent"]
     J --> K{"Pydantic quote contract"}
     K --> L["Trusted date and cost calculations"]
     L --> M["NetworkX CPM impact"]
-    M --> N["Streamlit audit dashboard"]
+    M --> N["Hash-chained audit dashboard"]
 ```
 
 ## Requirements
@@ -55,6 +57,21 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 Copy-Item .env.example .env
 ```
+
+Create separate local accounts from the trusted workstation terminal. Passwords are
+entered interactively and are never placed in the command, source code, or `.env` file:
+
+```powershell
+python manage_users.py create --username preparer --display-name "Package Preparer" --role PREPARER
+python manage_users.py create --username reviewer --display-name "Design Reviewer" --role DESIGN_REVIEWER
+python manage_users.py create --username admin --display-name "Local Administrator" --role ADMIN
+python manage_users.py list
+```
+
+Passwords must contain 12-128 characters. They are stored using unique 16-byte salts and
+Python's `scrypt` implementation with `N=2^15`, `r=8`, and `p=3`. Five failed attempts
+lock an account for 15 minutes. Local shell and database access remain a trusted
+workstation-administrator boundary.
 
 Verify and ingest the controlled RAG source documents:
 
@@ -116,14 +133,24 @@ Open `http://localhost:8501` and use a complete input such as:
 Site update Rev-102: Need 150 m3 of C60 concrete for the column pour.
 ```
 
-The note must contain a revision ID, construction action, supported material, affected element, positive quantity, and unit.
+Sign in as the `PREPARER`. The note must contain a revision ID, construction action,
+supported material, affected element, positive quantity, and unit.
 
 When a grounded package is created, it appears in **Human approval queue**. Inspect the
 site note, material requirements, verified claims, cited passages, and snapshot SHA-256;
-then enter the reviewer name and role and record **APPROVE** or **REJECT**. Procurement
-planning and CPM analysis run only after approval. A rejection is terminal, and the same
-review cannot be decided twice. Reviewer identity is audit metadata in this local version;
-it is not authenticated and must not be presented as an electronic signature.
+then sign out and sign in with a different `DESIGN_REVIEWER` or `PROJECT_MANAGER`
+account. Re-enter that account's password and record **APPROVE** or **REJECT**.
+Procurement planning and CPM analysis run only after approval. A rejection is terminal,
+and the same review cannot be decided twice. Sessions expire after 30 idle minutes or
+eight total hours.
+
+Account maintenance remains an explicit local administrator action:
+
+```powershell
+python manage_users.py deactivate --username reviewer
+python manage_users.py activate --username reviewer
+python manage_users.py reset-password --username reviewer
+```
 
 ## Run the automated tests
 
@@ -134,7 +161,13 @@ python -m unittest discover -s tests -v
 python -m unittest test_stress_cases -v
 ```
 
-The suite verifies input rejection, Pydantic contracts, multiple-material storage, foreign-key enforcement, trusted procurement arithmetic and dates, CPM calculations, persistent ChromaDB retrieval, controlled-PDF integrity, citation metadata, confidence rejection, approval/rejection gating, snapshot tamper detection, replay prevention, compatibility safeguards, and audit logging.
+The suite verifies input rejection, password hashing and lockout, session expiration,
+server-side role permissions, approval-time reauthentication, separation of duties,
+Pydantic contracts, multiple-material storage, foreign-key enforcement, trusted
+procurement arithmetic and dates, CPM calculations, persistent ChromaDB retrieval,
+controlled-PDF integrity, citation metadata, confidence rejection, approval/rejection
+gating, snapshot tamper detection, replay prevention, database migration, and audit-chain
+integrity.
 
 ## Configuration
 
@@ -168,6 +201,9 @@ Copy `.env.example` to `.env`.
 | `grounding.py` | Claim/chunk integrity, exact-quote alignment, numeric support, site-fact isolation, and version-conflict checks |
 | `evaluate_grounding.py` | Real-document acceptance and guard-rejection evaluation |
 | `approval.py` | Immutable review snapshots, SHA-256 integrity, stale-state checks, and replay prevention |
+| `security.py` | Scrypt authentication, lockout, sessions, RBAC, reauthentication, and account controls |
+| `audit.py` | Ordered SHA-256 event chain and integrity verification |
+| `manage_users.py` | Interactive trusted-workstation account administration |
 | `procurement_agent.py` | Unverified procurement estimates with trusted local calculations |
 | `cpm_solver.py` | NetworkX schedule and critical-path calculations |
 | `agent_pipeline.py` | Orchestration and run-status audit trail |
@@ -177,8 +213,17 @@ Copy `.env.example` to `.env`.
 ## Data and trust boundaries
 
 - Procurement suppliers and prices are LLM planning estimates and are stored as `PENDING_VERIFICATION` / `LLM_ESTIMATE_UNVERIFIED`.
-- Procurement and schedule agents run only after a verified package receives one recorded approval. Rejection is terminal, and a changed or replayed package is blocked.
-- Reviewer name and role are self-declared audit fields in this local prototype. They are not authenticated identities, electronic signatures, or role-based authorization.
+- Package creation requires an active `PREPARER`. Decisions require an active
+  `DESIGN_REVIEWER` or `PROJECT_MANAGER`, fresh password verification, and a different
+  authenticated user from the preparer.
+- Procurement and schedule agents run only after a verified package receives one
+  authorized approval. Rejection is terminal, and a changed or replayed package is blocked.
+- Authentication is local to the workstation. It does not provide MFA, federation,
+  account recovery, enterprise SSO, or a legally qualified electronic signature.
+- The SHA-256 audit chain detects ordinary modification, deletion, insertion, and
+  reordering relative to its stored head. It is not an externally anchored digital
+  signature; a database administrator able to rewrite the entire chain and its head remains
+  inside the trusted local-workstation boundary.
 - Delivery dates and total costs are recalculated in Python instead of being trusted from the model.
 - The live retriever uses controlled PDF chunks, local trained MiniLM embeddings,
   BM25-style lexical evidence, discipline routing, persistent ChromaDB storage, top-k

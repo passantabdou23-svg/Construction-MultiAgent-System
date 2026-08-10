@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 
 import pandas as pd
 import streamlit as st
 
 from agent_pipeline import review_construction_agent_pipeline, run_construction_agent_pipeline
 from approval import ApprovalError
+from audit import AuditIntegrityError, verify_audit_chain
 from database import (
     TABLES,
     database_counts,
@@ -18,6 +20,21 @@ from database import (
     list_pending_approval_requests,
 )
 from settings import settings
+from security import (
+    PERMISSION_CREATE_PACKAGE,
+    PERMISSION_DECIDE_PACKAGE,
+    AuthenticationError,
+    AuthenticatedPrincipal,
+    SecurityError,
+    authenticate_user,
+    count_users,
+    get_active_principal,
+    has_permission,
+    principal_from_mapping,
+    record_logout,
+    session_is_expired,
+    utc_now,
+)
 from validation import SiteNoteValidationError
 
 
@@ -31,6 +48,104 @@ init_db(settings.database_path)
 st.session_state.setdefault("last_pipeline_result", None)
 st.session_state.setdefault("last_review_package", None)
 st.session_state.setdefault("review_flash", None)
+st.session_state.setdefault("auth_user", None)
+st.session_state.setdefault("authenticated_at", None)
+st.session_state.setdefault("last_activity_at", None)
+
+
+def clear_authenticated_session() -> None:
+    for key in (
+        "auth_user",
+        "authenticated_at",
+        "last_activity_at",
+        "last_pipeline_result",
+        "last_review_package",
+        "review_flash",
+    ):
+        st.session_state[key] = None
+
+
+def render_login() -> None:
+    st.title("Construction multi-agent control centre")
+    st.caption("Authenticated local governance for the controlled planning workflow.")
+    if count_users(db_path=settings.database_path) == 0:
+        st.warning(
+            "No local accounts exist. Create separate preparer and reviewer accounts "
+            "from the trusted workstation terminal before signing in.",
+            icon=":material/admin_panel_settings:",
+        )
+        st.code(
+            "\n".join(
+                (
+                    "python manage_users.py create --username preparer --display-name \"Package Preparer\" --role PREPARER",
+                    "python manage_users.py create --username reviewer --display-name \"Design Reviewer\" --role DESIGN_REVIEWER",
+                    "python manage_users.py create --username admin --display-name \"Local Administrator\" --role ADMIN",
+                )
+            ),
+            language="powershell",
+        )
+        st.stop()
+
+    with st.form("login_form", border=True):
+        st.subheader("Sign in")
+        username = st.text_input(
+            "Username",
+            autocomplete="username",
+            max_chars=64,
+            icon=":material/person:",
+        )
+        password = st.text_input(
+            "Password",
+            type="password",
+            autocomplete="current-password",
+            max_chars=128,
+            icon=":material/password:",
+        )
+        submitted = st.form_submit_button(
+            "Sign in",
+            type="primary",
+            icon=":material/login:",
+        )
+    if submitted:
+        try:
+            principal = authenticate_user(
+                username,
+                password,
+                db_path=settings.database_path,
+            )
+        except AuthenticationError:
+            st.error("Invalid credentials or account unavailable.", icon=":material/lock:")
+        else:
+            now = utc_now()
+            st.session_state.auth_user = principal.model_dump()
+            st.session_state.authenticated_at = now
+            st.session_state.last_activity_at = now
+            st.rerun()
+    st.stop()
+
+
+if st.session_state.auth_user is None:
+    render_login()
+
+principal = principal_from_mapping(st.session_state.auth_user)
+current_principal = get_active_principal(principal.user_id, db_path=settings.database_path)
+authenticated_at = st.session_state.authenticated_at
+last_activity_at = st.session_state.last_activity_at
+if (
+    current_principal is None
+    or current_principal != principal
+    or not isinstance(authenticated_at, datetime)
+    or not isinstance(last_activity_at, datetime)
+    or session_is_expired(authenticated_at, last_activity_at)
+):
+    if current_principal is not None:
+        record_logout(current_principal, reason="SESSION_EXPIRED", db_path=settings.database_path)
+    clear_authenticated_session()
+    st.warning("Your session expired or the account changed. Sign in again.")
+    st.rerun()
+
+principal = current_principal
+st.session_state.last_activity_at = utc_now()
 
 
 def load_table(table_name: str) -> pd.DataFrame:
@@ -39,6 +154,16 @@ def load_table(table_name: str) -> pd.DataFrame:
     frame = pd.DataFrame(fetch_table(table_name, db_path=settings.database_path))
     if table_name == "approval_requests" and "payload_json" in frame.columns:
         frame = frame.drop(columns=["payload_json"])
+    if table_name == "users":
+        secret_columns = [
+            "password_hash",
+            "password_salt",
+            "password_algorithm",
+            "password_parameters_json",
+        ]
+        frame = frame.drop(
+            columns=[column for column in secret_columns if column in frame.columns]
+        )
     return frame
 
 
@@ -86,10 +211,20 @@ def render_verified_evidence(package: dict) -> None:
 st.title("Construction multi-agent control centre")
 st.caption(
     "Local Ollama workflow with deterministic validation, routed hybrid retrieval, "
-    "recorded human approval, procurement planning, CPM impact analysis, and SQLite audit lineage."
+    "authenticated human approval, procurement planning, CPM impact analysis, and "
+    "hash-chained SQLite audit lineage."
 )
 
 with st.sidebar:
+    st.subheader("Signed-in user")
+    st.badge(principal.role, icon=":material/verified_user:", color="blue")
+    st.write(f"**{principal.display_name}**")
+    st.caption(f"`{principal.username}`")
+    if st.button("Sign out", icon=":material/logout:", width="stretch"):
+        record_logout(principal, db_path=settings.database_path)
+        clear_authenticated_session()
+        st.rerun()
+    st.divider()
     st.subheader("System configuration")
     st.badge("Local processing", icon=":material/lock:", color="green")
     st.write(f"**Model:** `{settings.ollama_model}`")
@@ -108,14 +243,17 @@ with st.sidebar:
             "- Supplier and cost outputs are planning estimates requiring human verification.\n"
             "- Retrieved passages come from controlled documents with page citations; they are not compliance certificates.\n"
             "- Document routing is discipline-aware; unsupported commercial and non-England compliance requests are rejected.\n"
-            "- Procurement and scheduling cannot run until a pending package receives one recorded decision.\n"
-            "- Reviewer names and roles are self-declared; authenticated RBAC is not yet implemented.\n"
+            "- Procurement and scheduling cannot run until a pending package receives one authenticated decision.\n"
+            "- PREPARER users cannot decide their own packages; reviewer roles are enforced server-side.\n"
+            "- Approval requires password reauthentication and is recorded in the hash-chained audit log.\n"
             "- CPM uses the project demonstration schedule, not a live Primavera/MS Project file."
         )
 
 
 counts = database_counts(settings.database_path)
 with st.container(horizontal=True):
+    st.metric("Active users", counts["active_users"], border=True)
+    st.metric("Audit events", counts["audit_events"], border=True)
     st.metric("Design revisions", counts["revisions"], border=True)
     st.metric("Material requirements", counts["materials"], border=True)
     st.metric("Unverified quotes", counts["quotes"], border=True)
@@ -125,9 +263,16 @@ with st.container(horizontal=True):
 
 
 left, right = st.columns([1.35, 1], gap="large")
+can_prepare = has_permission(principal, PERMISSION_CREATE_PACKAGE)
+can_decide = has_permission(principal, PERMISSION_DECIDE_PACKAGE)
 
 with left:
     st.subheader("Process a controlled site revision")
+    if not can_prepare:
+        st.info(
+            "Your role can inspect the audit trail but cannot prepare review packages.",
+            icon=":material/policy:",
+        )
     with st.form("site_revision_form", border=True):
         site_note = st.text_area(
             "Construction site note",
@@ -139,11 +284,13 @@ with left:
                 "Include a Rev-ID, construction action, material, affected element, "
                 "positive quantity, and unit. Ambiguous notes are rejected."
             ),
+            disabled=not can_prepare,
         )
         submitted = st.form_submit_button(
             "Prepare review package",
             type="primary",
             icon=":material/fact_check:",
+            disabled=not can_prepare,
         )
 
     if submitted:
@@ -155,6 +302,7 @@ with left:
                 st.write("Checking the note before contacting the model")
                 result = run_construction_agent_pipeline(
                     site_note,
+                    principal=principal,
                     db_path=settings.database_path,
                 )
                 st.write("Design facts, grounded claims, and citations passed verification")
@@ -225,8 +373,15 @@ with right:
 st.header("Human approval queue")
 st.caption(
     "Review the site note, extracted design, and cited evidence before one irreversible decision. "
-    "Reviewer identity is self-declared in this local prototype."
+    "Identity and role come from the authenticated account; password reauthentication and "
+    "separation of duties are enforced before the decision is recorded."
 )
+
+if not can_decide:
+    st.info(
+        "Your role may inspect pending packages but cannot approve or reject them.",
+        icon=":material/policy:",
+    )
 
 if st.session_state.review_flash:
     flash_kind, flash_message = st.session_state.review_flash
@@ -246,6 +401,7 @@ else:
         options=list(review_options),
         format_func=lambda review_id: (
             f"{review_options[review_id]['revision_id']} / "
+            f"prepared by {review_options[review_id]['preparer_username'] or 'legacy user'} / "
             f"requested {review_options[review_id]['requested_at']}"
         ),
         key="selected_review_id",
@@ -259,6 +415,10 @@ else:
             st.badge("Pending", icon=":material/pending_actions:", color="orange")
             st.write(f"**Review ID:** `{selected_review_id}`")
             st.write(f"**Revision:** `{selected_row['revision_id']}`")
+            st.write(
+                f"**Prepared by:** "
+                f"{selected_row['preparer_display_name'] or 'Unauthenticated legacy package'}"
+            )
             st.write(f"**Site note:** {review_package['site_note']}")
             st.write(f"**Affected element:** {review_package['design']['affected_element']}")
             st.write(f"**Snapshot SHA-256:** `{selected_row['payload_sha256']}`")
@@ -271,32 +431,52 @@ else:
         with st.expander("Inspect claims and evidence before deciding", icon=":material/source:"):
             render_verified_evidence(review_package)
 
+        separation_ok = bool(selected_row["prepared_by_user_id"]) and (
+            selected_row["prepared_by_user_id"] != principal.user_id
+        )
+        decision_allowed = can_decide and separation_ok
+        if selected_row["prepared_by_user_id"] == principal.user_id:
+            st.warning(
+                "Separation of duties blocks you from deciding a package you prepared.",
+                icon=":material/shield_lock:",
+            )
+        elif not selected_row["prepared_by_user_id"]:
+            st.warning(
+                "This legacy package has no authenticated preparer. Recreate it before review.",
+                icon=":material/history:",
+            )
+
         with st.form(f"approval_form_{selected_review_id}", border=True):
             st.subheader("Record review decision")
-            reviewer_name = st.text_input(
-                "Reviewer name",
-                max_chars=120,
-                help="Recorded for audit but not authenticated in this local prototype.",
-            )
-            reviewer_role = st.selectbox(
-                "Reviewer role",
-                ["Design engineer", "Project manager", "Authorized reviewer"],
+            st.write(f"**Authenticated reviewer:** {principal.display_name}")
+            st.write(f"**Authorized role:** `{principal.role}`")
+            reauthentication_password = st.text_input(
+                "Confirm your password",
+                type="password",
+                autocomplete="current-password",
+                max_chars=128,
+                disabled=not decision_allowed,
+                help="A fresh credential check is required for this high-impact decision.",
+                icon=":material/password:",
             )
             decision = st.segmented_control(
                 "Decision",
                 ["APPROVE", "REJECT"],
                 selection_mode="single",
                 default=None,
+                disabled=not decision_allowed,
             )
             review_comment = st.text_area(
                 "Review comment",
                 max_chars=2_000,
                 help="A rejection requires a reason of at least 10 characters.",
+                disabled=not decision_allowed,
             )
             decision_submitted = st.form_submit_button(
                 "Record decision",
                 type="primary",
                 icon=":material/gavel:",
+                disabled=not decision_allowed,
             )
 
         if decision_submitted:
@@ -308,11 +488,11 @@ else:
                         outcome = review_construction_agent_pipeline(
                             selected_review_id,
                             {
-                                "reviewer_name": reviewer_name,
-                                "reviewer_role": reviewer_role,
                                 "decision": decision,
                                 "comment": review_comment,
                             },
+                            principal=principal,
+                            reauthentication_password=reauthentication_password,
                             db_path=settings.database_path,
                         )
                         if outcome["status"] == "COMPLETED":
@@ -338,12 +518,27 @@ else:
                     st.rerun()
                 except ApprovalError as error:
                     st.error(f"The approval gate stopped safely: {error}")
+                except SecurityError as error:
+                    st.error(f"Authorization stopped the decision: {error}")
                 except Exception as error:
                     st.error(f"The decision could not be completed safely: {error}")
 
 
 st.header("Audit trail")
-st.caption("Every table is read-only in this dashboard. Runtime records remain in local SQLite.")
+st.caption(
+    "Every table is read-only in this dashboard. Runtime records remain in local SQLite. "
+    "The SHA-256 event chain detects modified, missing, or reordered stored events."
+)
+try:
+    audit_integrity = verify_audit_chain(settings.database_path)
+except AuditIntegrityError as error:
+    st.error(f"Audit-chain verification failed: {error}", icon=":material/gpp_bad:")
+else:
+    st.success(
+        f"Audit chain verified: {audit_integrity['event_count']} event(s), "
+        f"head `{audit_integrity['head_hash']}`",
+        icon=":material/verified:",
+    )
 
 tabs = st.tabs(
     [
@@ -353,6 +548,8 @@ tabs = st.tabs(
         ":material/request_quote: Procurement",
         ":material/account_tree: Schedule",
         ":material/history: Pipeline runs",
+        ":material/group: Users",
+        ":material/security: Security events",
     ]
 )
 
@@ -363,6 +560,8 @@ table_views = (
     (tabs[3], "procurement_records", "Unverified procurement planning estimates"),
     (tabs[4], "schedule_logs", "Calculated CPM impacts"),
     (tabs[5], "pipeline_runs", "Execution and rejection history"),
+    (tabs[6], "users", "Local account metadata"),
+    (tabs[7], "audit_events", "Hash-chained authentication and governance events"),
 )
 
 for tab, table_name, title in table_views:
