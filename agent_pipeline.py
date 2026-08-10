@@ -38,6 +38,14 @@ from schemas import (
     ScheduleImpact,
     VerifiedDesignResult,
 )
+from security import (
+    PERMISSION_CREATE_PACKAGE,
+    PERMISSION_DECIDE_PACKAGE,
+    AuthenticatedPrincipal,
+    authorize_principal,
+    ensure_separation_of_duties,
+    reauthenticate_user,
+)
 from validation import SiteNoteValidationError, validate_site_note
 
 
@@ -112,15 +120,24 @@ class LocalLLMSchedulerAgent:
 def run_construction_agent_pipeline(
     site_note: str | None = None,
     *,
+    principal: AuthenticatedPrincipal,
     db_path: str = DB_NAME,
     rag: ConstructionRAG | None = None,
     design_agent: LocalLLMDesignAgent | None = None,
 ) -> dict:
     """Validate and ground a revision, then persist an immutable human-review package."""
     init_db(db_path)
+    current_principal = authorize_principal(
+        principal, PERMISSION_CREATE_PACKAGE, db_path=db_path
+    )
     run_id = str(uuid4())
     raw_note = (site_note or "").strip()
-    start_pipeline_run(run_id, raw_note or "<empty>", db_path=db_path)
+    start_pipeline_run(
+        run_id,
+        raw_note or "<empty>",
+        current_principal.user_id,
+        db_path=db_path,
+    )
     revision_id: str | None = None
 
     try:
@@ -176,6 +193,7 @@ def run_construction_agent_pipeline(
             review_id,
             run_id,
             design.revision_id,
+            current_principal.user_id,
             payload_json,
             payload_sha256,
             db_path=db_path,
@@ -190,7 +208,13 @@ def run_construction_agent_pipeline(
             review=review_record_from_row(review_row),
         ).model_dump(mode="json")
     except (SiteNoteValidationError, GroundingRefusalError) as error:
-        finish_pipeline_run(run_id, "REJECTED", error_message=str(error), db_path=db_path)
+        finish_pipeline_run(
+            run_id,
+            "REJECTED",
+            error_message=str(error),
+            actor_user_id=current_principal.user_id,
+            db_path=db_path,
+        )
         raise
     except Exception as error:
         finish_pipeline_run(
@@ -198,6 +222,7 @@ def run_construction_agent_pipeline(
             "FAILED",
             revision_id=revision_id,
             error_message=str(error),
+            actor_user_id=current_principal.user_id,
             db_path=db_path,
         )
         raise
@@ -207,20 +232,30 @@ def review_construction_agent_pipeline(
     review_id: str,
     decision: ReviewDecisionInput | dict[str, Any],
     *,
+    principal: AuthenticatedPrincipal,
+    reauthentication_password: str,
     db_path: str = DB_NAME,
     procurement_agent: LocalLLMProcurementAgent | None = None,
     scheduler_agent: LocalLLMSchedulerAgent | None = None,
 ) -> dict:
     """Record one human decision and run downstream agents only after approval."""
     init_db(db_path)
+    current_principal = authorize_principal(
+        principal, PERMISSION_DECIDE_PACKAGE, db_path=db_path
+    )
     decision_input = ReviewDecisionInput.model_validate(decision)
     row, payload = load_pending_approval(review_id, db_path=db_path)
+    ensure_separation_of_duties(row.get("prepared_by_user_id"), current_principal)
+    reauthenticate_user(
+        current_principal,
+        reauthentication_password,
+        db_path=db_path,
+    )
     decision_status = "APPROVED" if decision_input.decision == "APPROVE" else "REJECTED"
     record_approval_decision(
         review_id,
         status=decision_status,
-        reviewer_name=decision_input.reviewer_name,
-        reviewer_role=decision_input.reviewer_role,
+        decided_by_user_id=current_principal.user_id,
         review_comment=decision_input.comment,
         expected_payload_sha256=row["payload_sha256"],
         db_path=db_path,
@@ -268,6 +303,7 @@ def review_construction_agent_pipeline(
             row["run_id"],
             "COMPLETED",
             revision_id=payload.design.revision_id,
+            actor_user_id=current_principal.user_id,
             db_path=db_path,
         )
         return result.model_dump(mode="json")
@@ -277,11 +313,11 @@ def review_construction_agent_pipeline(
             "FAILED",
             revision_id=payload.design.revision_id,
             error_message=str(error),
+            actor_user_id=current_principal.user_id,
             db_path=db_path,
         )
         raise
 
 
 if __name__ == "__main__":
-    example = "Site update Rev-905: Need 200 m3 of C40 concrete for the ground slab."
-    print(run_construction_agent_pipeline(example))
+    raise SystemExit("Use the authenticated Streamlit dashboard to run this workflow")

@@ -8,19 +8,22 @@ Run the application on the same workstation as Ollama. This is the cleanest conf
 
 1. Open PowerShell in the repository.
 2. Activate the Python 3.12 virtual environment.
-3. Confirm `ollama list` contains the configured model.
-4. Run `python ingest_documents.py` and confirm 4 checksummed PDFs produce 586 auditable chunks.
-5. Run `python index_documents.py` and confirm 526 retrieval-eligible chunks are persistent.
-6. Run `python evaluate_rag.py --top-k 5` and confirm Hit@5, Top-1, routing, positive acceptance, and negative rejection targets pass.
-7. Run `python evaluate_grounding.py` and confirm supported acceptance and guard rejection both pass.
-8. Run `python -m unittest discover -s tests -v`.
-9. Run `python check_db.py` and inspect the current audit-record counts.
-10. Start the dashboard with `python -m streamlit run app.py`.
-11. Test one approved revision, one reviewer rejection, one insufficient-evidence refusal, and one irrelevant note before the audience arrives.
-12. Before approval, confirm the run is at `workflow_stage = AWAITING_APPROVAL` and that procurement and schedule tables have no rows for that revision.
-13. For the approved revision, confirm the persisted material rows contain only facts explicitly stated in the site note; retrieved standards must never create extra procurement items.
-14. Confirm a second decision for the same review is rejected and a changed snapshot cannot be approved.
-15. Explain that reviewer names and roles are self-declared audit fields, verified citations are guidance passages, and procurement quotes remain estimates pending verification.
+3. Create separate `PREPARER`, `DESIGN_REVIEWER`, and `ADMIN` accounts with `python manage_users.py create`; never share one account between roles.
+4. Confirm `ollama list` contains the configured model.
+5. Run `python ingest_documents.py` and confirm 4 checksummed PDFs produce 586 auditable chunks.
+6. Run `python index_documents.py` and confirm 526 retrieval-eligible chunks are persistent.
+7. Run `python evaluate_rag.py --top-k 5` and confirm Hit@5, Top-1, routing, positive acceptance, and negative rejection targets pass.
+8. Run `python evaluate_grounding.py` and confirm supported acceptance and guard rejection both pass.
+9. Run `python -m unittest discover -s tests -v`.
+10. Run `python check_db.py` and confirm the audit chain reports valid before proceeding.
+11. Start the dashboard with `python -m streamlit run app.py`.
+12. Test one approved revision, one reviewer rejection, one insufficient-evidence refusal, and one irrelevant note before the audience arrives.
+13. Confirm a `PREPARER` cannot decide a package and a reviewer cannot create one.
+14. Confirm approval requires the reviewer's current password and failed credentials do not change the pending package.
+15. Before approval, confirm the run is at `workflow_stage = AWAITING_APPROVAL` and that procurement and schedule tables have no rows for that revision.
+16. For the approved revision, confirm the persisted material rows contain only facts explicitly stated in the site note; retrieved standards must never create extra procurement items.
+17. Confirm a second decision for the same review is rejected and a changed snapshot cannot be approved.
+18. Explain that local authentication is not MFA or a legal electronic signature, verified citations are guidance passages, and procurement quotes remain estimates pending verification.
 
 ## Local-only launch
 
@@ -30,15 +33,17 @@ python -m streamlit run app.py --server.address 127.0.0.1 --server.port 8501
 
 Then open `http://localhost:8501`.
 
-## Controlled LAN demonstration
+## LAN demonstrations require TLS
 
-Only expose the application on a trusted network:
+Do not expose the password form over plain HTTP on a LAN. The following bind command is
+acceptable only behind a correctly configured HTTPS reverse proxy on a trusted network:
 
 ```powershell
 python -m streamlit run app.py --server.address 0.0.0.0 --server.port 8501
 ```
 
-Allowing a firewall rule exposes the interface to other devices on that network. Do not use this mode on a public network and do not store sensitive project notes in the demonstration database.
+Allowing a firewall rule exposes the interface to other devices. Without HTTPS, credentials
+and project content can be intercepted. Prefer the localhost launch for the academic demo.
 
 ## Why Streamlit Community Cloud is not the default
 
@@ -46,7 +51,13 @@ The current architecture depends on a local Ollama service and a local SQLite fi
 
 ## Production boundary
 
-Before production use, add authentication, role-based authorization with separation of duties, electronic-signature policy where required, HTTPS, a managed database with backups, a controlled schedule import, verified supplier integrations, licensed standards content, monitoring, and data-retention controls.
+The local phase now provides scrypt password storage, account lockout, server-side roles,
+separation of duties, approval-time reauthentication, session expiry, and a SHA-256 audit
+chain. Before production use, replace or integrate this with an enterprise identity provider,
+MFA, recovery and revocation procedures, HTTPS, centrally managed authorization, an
+electronic-signature policy where required, an externally anchored audit service, a managed
+database with backups, a controlled schedule import, verified supplier integrations,
+licensed standards content, monitoring, and data-retention controls.
 
 The current application must therefore be presented as a validated local planning prototype, not as an autonomous construction approval system.
 

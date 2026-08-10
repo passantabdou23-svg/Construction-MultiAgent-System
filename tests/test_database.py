@@ -145,7 +145,10 @@ class DatabaseTests(unittest.TestCase):
         legacy_run = fetch_table("pipeline_runs", db_path=legacy_path)[0]
         self.assertEqual(legacy_run["run_id"], "legacy-run")
         self.assertEqual(legacy_run["workflow_stage"], "TERMINAL")
+        self.assertIsNone(legacy_run["created_by_user_id"])
         self.assertEqual(fetch_table("approval_requests", db_path=legacy_path), [])
+        self.assertEqual(fetch_table("users", db_path=legacy_path), [])
+        self.assertEqual(fetch_table("audit_events", db_path=legacy_path), [])
 
 
 if __name__ == "__main__":

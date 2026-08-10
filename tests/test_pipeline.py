@@ -10,6 +10,13 @@ from approval import ApprovalIntegrityError, ApprovalStateError
 from database import connect_db, fetch_table, save_design_revision
 from grounding import GroundingRefusalError
 from schemas import ReviewDecisionInput
+from security import (
+    ROLE_DESIGN_REVIEWER,
+    ROLE_PREPARER,
+    AuthenticationError,
+    AuthorizationError,
+    create_user,
+)
 from validation import SiteNoteValidationError
 
 
@@ -146,18 +153,36 @@ class RefusingDesignAgent:
         )
 
 
+TEST_PASSWORD = "Correct-Horse-Battery-401"
+
+
+def provision_users(db_path):
+    preparer = create_user(
+        "preparer",
+        "Package Preparer",
+        ROLE_PREPARER,
+        TEST_PASSWORD,
+        db_path=db_path,
+    )
+    reviewer = create_user(
+        "reviewer",
+        "Dr Reviewer",
+        ROLE_DESIGN_REVIEWER,
+        TEST_PASSWORD,
+        db_path=db_path,
+    )
+    return preparer, reviewer
+
+
 class PipelineSafetyTests(unittest.TestCase):
-    def test_review_decision_contract_requires_valid_role_and_rejection_reason(self):
+    def test_review_decision_contract_rejects_client_identity_and_short_reason(self):
         with self.assertRaises(ValidationError):
             ReviewDecisionInput(
                 reviewer_name="Dr Reviewer",
-                reviewer_role="Anonymous",
                 decision="APPROVE",
             )
         with self.assertRaises(ValidationError):
             ReviewDecisionInput(
-                reviewer_name="Dr Reviewer",
-                reviewer_role="Design engineer",
                 decision="REJECT",
                 comment="No",
             )
@@ -165,9 +190,11 @@ class PipelineSafetyTests(unittest.TestCase):
     def test_irrelevant_note_is_rejected_and_audited_before_rag_or_llm(self):
         with tempfile.TemporaryDirectory() as directory:
             db_path = str(Path(directory) / "pipeline.db")
+            preparer, _ = provision_users(db_path)
             with self.assertRaises(SiteNoteValidationError):
                 run_construction_agent_pipeline(
                     "Hey team, do not forget the pizza party in the site trailer this Friday.",
+                    principal=preparer,
                     db_path=db_path,
                 )
             runs = fetch_table("pipeline_runs", db_path=db_path)
@@ -178,11 +205,13 @@ class PipelineSafetyTests(unittest.TestCase):
     def test_verified_package_waits_for_human_approval_before_downstream_agents(self):
         with tempfile.TemporaryDirectory() as directory:
             db_path = str(Path(directory) / "pipeline.db")
+            preparer, reviewer = provision_users(db_path)
             rag = FakeRAG()
             design_agent = FakeDesignAgent(db_path)
 
             pending = run_construction_agent_pipeline(
                 "Site update Rev-401: Need 25 m3 of C40 concrete for the foundation pour.",
+                principal=preparer,
                 db_path=db_path,
                 rag=rag,
                 design_agent=design_agent,
@@ -201,7 +230,9 @@ class PipelineSafetyTests(unittest.TestCase):
             runs = fetch_table("pipeline_runs", db_path=db_path)
             self.assertEqual(runs[0]["status"], "RUNNING")
             self.assertEqual(runs[0]["workflow_stage"], "AWAITING_APPROVAL")
-            self.assertEqual(len(fetch_table("approval_requests", db_path=db_path)), 1)
+            self.assertEqual(runs[0]["created_by_user_id"], preparer.user_id)
+            approval = fetch_table("approval_requests", db_path=db_path)[0]
+            self.assertEqual(approval["prepared_by_user_id"], preparer.user_id)
             self.assertEqual(fetch_table("procurement_records", db_path=db_path), [])
             self.assertEqual(fetch_table("schedule_logs", db_path=db_path), [])
 
@@ -210,11 +241,11 @@ class PipelineSafetyTests(unittest.TestCase):
             completed = review_construction_agent_pipeline(
                 pending["review"]["review_id"],
                 {
-                    "reviewer_name": "Dr Reviewer",
-                    "reviewer_role": "Design engineer",
                     "decision": "APPROVE",
                     "comment": "Reviewed against the site note and cited evidence.",
                 },
+                principal=reviewer,
+                reauthentication_password=TEST_PASSWORD,
                 db_path=db_path,
                 procurement_agent=procurement,
                 scheduler_agent=scheduler,
@@ -222,6 +253,8 @@ class PipelineSafetyTests(unittest.TestCase):
 
             self.assertEqual(completed["status"], "COMPLETED")
             self.assertEqual(completed["review"]["status"], "APPROVED")
+            self.assertEqual(completed["review"]["decided_by_user_id"], reviewer.user_id)
+            self.assertEqual(completed["review"]["reviewer_name"], reviewer.display_name)
             self.assertEqual(procurement.calls, ["Rev-401"])
             self.assertEqual(scheduler.calls, [("Rev-401", "foundation")])
             self.assertEqual(
@@ -229,11 +262,47 @@ class PipelineSafetyTests(unittest.TestCase):
                 "COMPLETED",
             )
 
+    def test_role_and_password_reauthentication_are_enforced(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = str(Path(directory) / "pipeline.db")
+            preparer, reviewer = provision_users(db_path)
+            pending = run_construction_agent_pipeline(
+                "Site update Rev-406: Need 25 m3 of C40 concrete for the foundation pour.",
+                principal=preparer,
+                db_path=db_path,
+                rag=FakeRAG(),
+                design_agent=FakeDesignAgent(db_path),
+            )
+
+            with self.assertRaises(AuthorizationError):
+                review_construction_agent_pipeline(
+                    pending["review"]["review_id"],
+                    {"decision": "APPROVE"},
+                    principal=preparer,
+                    reauthentication_password=TEST_PASSWORD,
+                    db_path=db_path,
+                )
+
+            with self.assertRaises(AuthenticationError):
+                review_construction_agent_pipeline(
+                    pending["review"]["review_id"],
+                    {"decision": "APPROVE"},
+                    principal=reviewer,
+                    reauthentication_password="Definitely-Wrong-Password",
+                    db_path=db_path,
+                )
+            self.assertEqual(
+                fetch_table("approval_requests", db_path=db_path)[0]["status"],
+                "PENDING",
+            )
+
     def test_rejection_is_terminal_and_never_runs_procurement_or_schedule(self):
         with tempfile.TemporaryDirectory() as directory:
             db_path = str(Path(directory) / "pipeline.db")
+            preparer, reviewer = provision_users(db_path)
             pending = run_construction_agent_pipeline(
                 "Site update Rev-403: Need 25 m3 of C40 concrete for the foundation pour.",
+                principal=preparer,
                 db_path=db_path,
                 rag=FakeRAG(),
                 design_agent=FakeDesignAgent(db_path),
@@ -244,11 +313,11 @@ class PipelineSafetyTests(unittest.TestCase):
             rejected = review_construction_agent_pipeline(
                 pending["review"]["review_id"],
                 {
-                    "reviewer_name": "Dr Reviewer",
-                    "reviewer_role": "Design engineer",
                     "decision": "REJECT",
                     "comment": "The site note requires clarification before procurement.",
                 },
+                principal=reviewer,
+                reauthentication_password=TEST_PASSWORD,
                 db_path=db_path,
                 procurement_agent=procurement,
                 scheduler_agent=scheduler,
@@ -267,10 +336,10 @@ class PipelineSafetyTests(unittest.TestCase):
                 review_construction_agent_pipeline(
                     pending["review"]["review_id"],
                     {
-                        "reviewer_name": "Second Reviewer",
-                        "reviewer_role": "Project manager",
                         "decision": "APPROVE",
                     },
+                    principal=reviewer,
+                    reauthentication_password=TEST_PASSWORD,
                     db_path=db_path,
                     procurement_agent=procurement,
                     scheduler_agent=scheduler,
@@ -279,8 +348,10 @@ class PipelineSafetyTests(unittest.TestCase):
     def test_changed_design_is_blocked_before_recording_approval(self):
         with tempfile.TemporaryDirectory() as directory:
             db_path = str(Path(directory) / "pipeline.db")
+            preparer, reviewer = provision_users(db_path)
             pending = run_construction_agent_pipeline(
                 "Site update Rev-404: Need 25 m3 of C40 concrete for the foundation pour.",
+                principal=preparer,
                 db_path=db_path,
                 rag=FakeRAG(),
                 design_agent=FakeDesignAgent(db_path),
@@ -296,10 +367,10 @@ class PipelineSafetyTests(unittest.TestCase):
                 review_construction_agent_pipeline(
                     pending["review"]["review_id"],
                     {
-                        "reviewer_name": "Dr Reviewer",
-                        "reviewer_role": "Design engineer",
                         "decision": "APPROVE",
                     },
+                    principal=reviewer,
+                    reauthentication_password=TEST_PASSWORD,
                     db_path=db_path,
                     procurement_agent=FakeProcurementAgent(),
                     scheduler_agent=FakeSchedulerAgent(),
@@ -310,8 +381,10 @@ class PipelineSafetyTests(unittest.TestCase):
     def test_changed_review_payload_is_blocked_before_recording_approval(self):
         with tempfile.TemporaryDirectory() as directory:
             db_path = str(Path(directory) / "pipeline.db")
+            preparer, reviewer = provision_users(db_path)
             pending = run_construction_agent_pipeline(
                 "Site update Rev-405: Need 25 m3 of C40 concrete for the foundation pour.",
+                principal=preparer,
                 db_path=db_path,
                 rag=FakeRAG(),
                 design_agent=FakeDesignAgent(db_path),
@@ -327,10 +400,10 @@ class PipelineSafetyTests(unittest.TestCase):
                 review_construction_agent_pipeline(
                     pending["review"]["review_id"],
                     {
-                        "reviewer_name": "Dr Reviewer",
-                        "reviewer_role": "Design engineer",
                         "decision": "APPROVE",
                     },
+                    principal=reviewer,
+                    reauthentication_password=TEST_PASSWORD,
                     db_path=db_path,
                     procurement_agent=FakeProcurementAgent(),
                     scheduler_agent=FakeSchedulerAgent(),
@@ -343,9 +416,11 @@ class PipelineSafetyTests(unittest.TestCase):
     def test_grounding_refusal_stops_procurement_and_is_audited(self):
         with tempfile.TemporaryDirectory() as directory:
             db_path = str(Path(directory) / "pipeline.db")
+            preparer, _ = provision_users(db_path)
             with self.assertRaises(GroundingRefusalError):
                 run_construction_agent_pipeline(
                     "Site update Rev-402: Need 25 m3 of C40 concrete for the foundation pour.",
+                    principal=preparer,
                     db_path=db_path,
                     rag=FakeRAG(),
                     design_agent=RefusingDesignAgent(),
