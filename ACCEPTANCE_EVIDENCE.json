@@ -1,12 +1,12 @@
 {
   "backup": {
+    "artifact_name": "construction_mas_pre-release_20260810T084816Z_a8fea58d.db",
     "audit_event_count": 18,
     "audit_head_hash": "7b9fe01873c8f2298ffd3508744dfc3e6f7eef9b7c215d56baa8c90dd0dc4984",
-    "database_path": "D:\\Project Data\\Trials\\Final XAI\\Passant\\MultiAgents\\backups\\construction_mas_pre-release_20260810T084816Z_a8fea58d.db",
     "sha256": "98c57970050478110f7b53d43d7b10ff3008689b8f8cce4574b5f8fc3f157025",
     "size_bytes": 118784
   },
-  "commit": "0f1a2534deb29517c5d4fb11b4f057744480a2ef",
+  "commit": "b76e39b20639e589ec0392bef596838568707428",
   "database": {
     "audit_event_count": 18,
     "audit_head_hash": "7b9fe01873c8f2298ffd3508744dfc3e6f7eef9b7c215d56baa8c90dd0dc4984",
@@ -22,7 +22,7 @@
       "schedule_impacts": 1
     }
   },
-  "generated_at_utc": "2026-08-10T10:58:26+00:00",
+  "generated_at_utc": "2026-08-10T11:55:07+00:00",
   "grounding": {
     "metrics": {
       "guard_rejection_cases": 7,
@@ -81,7 +81,7 @@
     "failures": 0,
     "passed": true,
     "skipped": 0,
-    "tests_run": 72
+    "tests_run": 73
   },
   "retrieval": {
     "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
@@ -100,7 +100,7 @@
     "threshold": 0.45,
     "top_k": 5
   },
-  "schema_version": 1,
+  "schema_version": 2,
   "scope_boundary": {
     "deployment": "Controlled single-workstation planning prototype",
     "engineering": "Does not replace a licensed engineer or regulatory approval",

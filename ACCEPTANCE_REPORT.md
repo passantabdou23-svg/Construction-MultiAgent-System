@@ -1,8 +1,8 @@
 # Final acceptance report
 
-**Status:** PASS  
-**Tested baseline commit:** `0f1a2534deb29517c5d4fb11b4f057744480a2ef`  
-**Generated (UTC):** 2026-08-10T10:58:26+00:00  
+**Status:** PASS
+**Tested baseline commit:** `b76e39b20639e589ec0392bef596838568707428`
+**Generated (UTC):** 2026-08-10T11:55:07+00:00
 **Python:** 3.12.0
 
 ## Acceptance scope
@@ -26,7 +26,7 @@ engineering certification, a verified supplier quotation, or a production author
 
 ## Automated verification
 
-- Repository tests: **72 passed**, 0 failures, 0 errors.
+- Repository tests: **73 passed**, 0 failures, 0 errors.
 - Stress tests: **3 passed**, 0 failures, 0 errors.
 - Retrieval Hit@5: **100.0%**.
 - Retrieval Top-1 accuracy: **100.0%**.

@@ -1,9 +1,25 @@
 import unittest
+from types import SimpleNamespace
 
-from generate_acceptance_evidence import build_markdown
+from generate_acceptance_evidence import _public_backup_evidence, build_markdown
 
 
 class AcceptanceEvidenceTests(unittest.TestCase):
+    def test_public_backup_evidence_removes_local_path(self):
+        result = SimpleNamespace(
+            database_path=r"D:\Private\Student Name\backups\accepted.db",
+            sha256="abc",
+            size_bytes=100,
+            audit_event_count=18,
+            audit_head_hash="def",
+        )
+
+        evidence = _public_backup_evidence(result)
+
+        self.assertEqual(evidence["artifact_name"], "accepted.db")
+        self.assertNotIn("database_path", evidence)
+        self.assertNotIn("Private", str(evidence))
+
     def test_markdown_reports_scope_and_aggregate_evidence(self):
         payload = {
             "overall_passed": True,

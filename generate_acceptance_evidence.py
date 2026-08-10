@@ -65,6 +65,17 @@ def _git_commit(project_root: Path) -> str:
     return completed.stdout.strip()
 
 
+def _public_backup_evidence(result: Any) -> dict[str, Any]:
+    """Return only portable, non-identifying backup evidence for a public report."""
+    return {
+        "artifact_name": Path(result.database_path).name,
+        "sha256": result.sha256,
+        "size_bytes": result.size_bytes,
+        "audit_event_count": result.audit_event_count,
+        "audit_head_hash": result.audit_head_hash,
+    }
+
+
 def collect_evidence(
     project_root: Path,
     database_path: Path,
@@ -85,10 +96,10 @@ def collect_evidence(
     grounding = _read_json(project_root / settings.rag_data_path / "grounding_evaluation.json")
     audit = verify_audit_chain(database_path)
     counts = database_counts(database_path)
-    backup = asdict(validate_database_backup(backup_path)) if backup_path else None
+    backup = _public_backup_evidence(validate_database_backup(backup_path)) if backup_path else None
 
     payload: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "commit": _git_commit(project_root),
         "python": platform.python_version(),
@@ -157,9 +168,9 @@ def build_markdown(evidence: dict[str, Any]) -> str:
     status = "PASS" if evidence["overall_passed"] else "FAIL"
     return f"""# Final acceptance report
 
-**Status:** {status}  
-**Tested baseline commit:** `{evidence['commit']}`  
-**Generated (UTC):** {evidence['generated_at_utc']}  
+**Status:** {status}
+**Tested baseline commit:** `{evidence['commit']}`
+**Generated (UTC):** {evidence['generated_at_utc']}
 **Python:** {evidence['python']}
 
 ## Acceptance scope
