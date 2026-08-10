@@ -15,15 +15,54 @@ Run the application on the same workstation as Ollama. This is the cleanest conf
 7. Run `python evaluate_rag.py --top-k 5` and confirm Hit@5, Top-1, routing, positive acceptance, and negative rejection targets pass.
 8. Run `python evaluate_grounding.py` and confirm supported acceptance and guard rejection both pass.
 9. Run `python -m unittest discover -s tests -v`.
-10. Run `python check_db.py` and confirm the audit chain reports valid before proceeding.
-11. Start the dashboard with `python -m streamlit run app.py`.
-12. Test one approved revision, one reviewer rejection, one insufficient-evidence refusal, and one irrelevant note before the audience arrives.
-13. Confirm a `PREPARER` cannot decide a package and a reviewer cannot create one.
-14. Confirm approval requires the reviewer's current password and failed credentials do not change the pending package.
-15. Before approval, confirm the run is at `workflow_stage = AWAITING_APPROVAL` and that procurement and schedule tables have no rows for that revision.
-16. For the approved revision, confirm the persisted material rows contain only facts explicitly stated in the site note; retrieved standards must never create extra procurement items.
-17. Confirm a second decision for the same review is rejected and a changed snapshot cannot be approved.
-18. Explain that local authentication is not MFA or a legal electronic signature, verified citations are guidance passages, and procurement quotes remain estimates pending verification.
+10. Run `python release_check.py --database construction_mas.db --runtime --with-ollama`
+    and confirm every readiness check passes.
+11. Create and validate a pre-demonstration backup using
+    `python manage_backup.py create --output-directory backups --label pre-demo` and the
+    printed validation command.
+12. Start the dashboard with `python -m streamlit run app.py`.
+13. Test one approved revision, one reviewer rejection, one insufficient-evidence refusal, and one irrelevant note before the audience arrives.
+14. Confirm a `PREPARER` cannot decide a package and a reviewer cannot create one.
+15. Confirm approval requires the reviewer's current password and failed credentials do not change the pending package.
+16. Before approval, confirm the run is at `workflow_stage = AWAITING_APPROVAL` and that procurement and schedule tables have no rows for that revision.
+17. For the approved revision, confirm the persisted material rows contain only facts explicitly stated in the site note; retrieved standards must never create extra procurement items.
+18. Confirm a second decision for the same review is rejected and a changed snapshot cannot be approved.
+19. Explain that local authentication is not MFA or a legal electronic signature, verified citations are guidance passages, and procurement quotes remain estimates pending verification.
+
+## Backup and recovery
+
+Create a transactionally consistent backup while the application is running:
+
+```powershell
+python manage_backup.py create --output-directory backups --label pre-release
+python manage_backup.py validate --backup "backups\<backup-file>.db"
+```
+
+Each backup has a sidecar manifest containing its SHA-256, size, audit-chain head, event
+count, and manifest schema. Keep both files together and store release copies outside the
+Git checkout with access controls appropriate to the project records.
+
+Restoration is deliberately explicit. Stop Streamlit and other database users, validate
+the selected backup, then run:
+
+```powershell
+python manage_backup.py restore --backup "backups\<backup-file>.db" `
+  --recovery-directory "backups\recovery" --confirm-replace
+python release_check.py --database construction_mas.db --runtime --with-ollama
+```
+
+If the destination exists, the command first creates a validated pre-restore backup. The
+replacement is verified in a temporary file and moved atomically; an open-file failure
+leaves the destination unchanged.
+
+## Continuous validation
+
+`GITHUB_ACTIONS_VALIDATION.template.yml` is activation-ready and uses Python 3.12, exact
+dependency pins, read-only repository permissions, and immutable GitHub Action revisions.
+Copy it to `.github/workflows/validation.yml` with a GitHub credential that has Workflow
+permission. Until then, run its commands locally. Ollama and the generated persistent
+ChromaDB index remain local release checks because CI intentionally does not contain
+runtime models or generated project data.
 
 ## Local-only launch
 

@@ -161,6 +161,17 @@ python -m unittest discover -s tests -v
 python -m unittest test_stress_cases -v
 ```
 
+Before a demonstration or release, run the complete local readiness contract:
+
+```powershell
+python release_check.py --database construction_mas.db --runtime --with-ollama
+```
+
+This verifies Python and exact dependency versions, controlled source checksums and page
+counts, release files, ignore rules, SQLite integrity, foreign keys, the audit chain,
+the persistent RAG index, and the configured Ollama model. See
+[RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) for the full release and recovery sequence.
+
 The suite verifies input rejection, password hashing and lockout, session expiration,
 server-side role permissions, approval-time reauthentication, separation of duties,
 Pydantic contracts, multiple-material storage, foreign-key enforcement, trusted
@@ -204,6 +215,9 @@ Copy `.env.example` to `.env`.
 | `security.py` | Scrypt authentication, lockout, sessions, RBAC, reauthentication, and account controls |
 | `audit.py` | Ordered SHA-256 event chain and integrity verification |
 | `manage_users.py` | Interactive trusted-workstation account administration |
+| `release_check.py` | Deterministic source, dependency, database, RAG, and Ollama readiness checks |
+| `manage_backup.py` | Verified SQLite online backup, validation, and guarded restore operations |
+| `release_ops.py` | Atomic backup/recovery implementation and integrity manifests |
 | `procurement_agent.py` | Unverified procurement estimates with trusted local calculations |
 | `cpm_solver.py` | NetworkX schedule and critical-path calculations |
 | `agent_pipeline.py` | Orchestration and run-status audit trail |
@@ -248,12 +262,17 @@ Copy `.env.example` to `.env`.
 
 ## Deployment
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for the local demonstration checklist, LAN access, and production-readiness boundary.
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the local demonstration checklist, backup and
+recovery procedure, LAN access, and production-readiness boundary. Security controls and
+reporting guidance are documented in [SECURITY.md](SECURITY.md).
 
 ## Repository policy
 
 - Runtime `.db` files are intentionally not versioned because they may contain local project records.
 - `.env` and Streamlit secrets are never committed.
-- `GITHUB_ACTIONS_TESTS.template.yml` contains the ready CI workflow. Copy it to
-  `.github/workflows/tests.yml` after the repository token is granted GitHub's
-  `workflow` scope.
+- `GITHUB_ACTIONS_VALIDATION.template.yml` contains the validated CI workflow using
+  immutable action revisions and read-only repository permissions. Copy it to
+  `.github/workflows/validation.yml` using a GitHub credential with Workflow permission
+  when MFA/token administration is available.
+- Live Ollama inference and generated ChromaDB validation are intentionally local release
+  checks; CI does not claim to validate a model service that it does not run.

@@ -1,0 +1,58 @@
+# Activation-ready workflow. Copy this file to .github/workflows/validation.yml when
+# the GitHub credential used for the commit has Workflow permission.
+name: Release validation
+
+on:
+  push:
+    branches:
+      - main
+      - "codex/**"
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python 3.12 deterministic validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CONSTRUCTION_DATABASE_PATH: ${{ runner.temp }}/construction-ci.db
+      PYTHONDONTWRITEBYTECODE: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install exact dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Verify dependency consistency
+        run: python -m pip check
+
+      - name: Compile Python source
+        run: python -m compileall -q -x "[\\/](\.git|\.venv|rag_data)[\\/]" .
+
+      - name: Run release readiness checks
+        run: python release_check.py --database "${CONSTRUCTION_DATABASE_PATH}"
+
+      - name: Run repository tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Run stress tests
+        run: python -m unittest test_stress_cases -v
