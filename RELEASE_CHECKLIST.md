@@ -40,6 +40,17 @@ Actions repeats the deterministic checks on Python 3.12. The live Ollama and per
 index checks remain local because CI has no trusted model service or generated runtime
 index.
 
+Generate the final privacy-safe evidence pack against the validated backup:
+
+```powershell
+python generate_acceptance_evidence.py --database construction_mas.db `
+  --backup "backups\<backup-file>.db" --runtime --with-ollama
+```
+
+Confirm `ACCEPTANCE_REPORT.md` says `PASS`, review `ACCEPTANCE_EVIDENCE.json`, and retain
+both with the release commit. The recorded commit is the tested source baseline from
+which the generated evidence was produced.
+
 ## 4. Backup and recovery
 
 Stop application writes before a restore. A live backup may be created safely:

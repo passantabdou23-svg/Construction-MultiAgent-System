@@ -216,6 +216,9 @@ Copy `.env.example` to `.env`.
 | `audit.py` | Ordered SHA-256 event chain and integrity verification |
 | `manage_users.py` | Interactive trusted-workstation account administration |
 | `release_check.py` | Deterministic source, dependency, database, RAG, and Ollama readiness checks |
+| `generate_acceptance_evidence.py` | Privacy-safe final acceptance evidence and Markdown/JSON report generator |
+| `ACCEPTANCE_REPORT.md` | Human-readable evidence for the tested release baseline |
+| `ACCEPTANCE_EVIDENCE.json` | Machine-readable acceptance evidence without credentials or project-note content |
 | `manage_backup.py` | Verified SQLite online backup, validation, and guarded restore operations |
 | `release_ops.py` | Atomic backup/recovery implementation and integrity manifests |
 | `procurement_agent.py` | Unverified procurement estimates with trusted local calculations |
@@ -239,7 +242,7 @@ Copy `.env.example` to `.env`.
   signature; a database administrator able to rewrite the entire chain and its head remains
   inside the trusted local-workstation boundary.
 - Delivery dates and total costs are recalculated in Python instead of being trusted from the model.
-- The live retriever uses controlled PDF chunks, local trained MiniLM embeddings,
+- The live retriever uses controlled PDF chunks, a pretrained MiniLM embedding model running locally,
   BM25-style lexical evidence, discipline routing, persistent ChromaDB storage, top-k
   citations, and a calibrated hybrid confidence threshold.
 - The current labelled set has 18 in-scope and 7 out-of-scope questions. The verified
@@ -265,6 +268,17 @@ Copy `.env.example` to `.env`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) for the local demonstration checklist, backup and
 recovery procedure, LAN access, and production-readiness boundary. Security controls and
 reporting guidance are documented in [SECURITY.md](SECURITY.md).
+
+Generate a reproducible acceptance pack after creating a validated backup:
+
+```powershell
+python generate_acceptance_evidence.py --database construction_mas.db `
+  --backup "backups\<backup-file>.db" --runtime --with-ollama
+```
+
+The generator runs the release checks, repository and stress tests, reads the controlled
+retrieval/grounding evaluations, validates the backup, and writes aggregate evidence only.
+It intentionally excludes usernames, passwords, site-note text, and procurement details.
 
 ## Repository policy
 
